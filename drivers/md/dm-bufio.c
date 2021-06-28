@@ -1730,8 +1730,7 @@ struct dm_bufio_client *dm_bufio_client_create(struct block_device *bdev, unsign
 	mutex_unlock(&dm_bufio_clients_lock);
 
 	while (c->need_reserved_buffers) {
-		struct dm_buffer *b = alloc_buffer(c,
-					GFP_KERNEL | __GFP_NORETRY);
+		struct dm_buffer *b = alloc_buffer(c, GFP_KERNEL);
 
 		if (!b) {
 			r = -ENOMEM;

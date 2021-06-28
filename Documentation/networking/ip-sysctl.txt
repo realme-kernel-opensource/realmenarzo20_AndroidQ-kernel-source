@@ -241,6 +241,14 @@ tcp_base_mss - INTEGER
 	Path MTU discovery (MTU probing).  If MTU probing is enabled,
 	this is the initial MSS used by the connection.
 
+tcp_min_snd_mss - INTEGER
+	TCP SYN and SYNACK messages usually advertise an ADVMSS option,
+	as described in RFC 1122 and RFC 6691.
+	If this ADVMSS option is smaller than tcp_min_snd_mss,
+	it is silently capped to tcp_min_snd_mss.
+
+	Default : 48 (at least 8 bytes of payload per segment)
+
 tcp_congestion_control - STRING
 	Set the congestion control algorithm to be used for new
 	connections. The algorithm "reno" is always available, but
@@ -855,11 +863,6 @@ ip_unprivileged_port_start - INTEGER
 
 	Default: 1024
 
-reserved_port_bind - BOOLEAN
-	If set, allows explicit bind requests to applications requesting
-	any port within the range of ip_local_reserved_ports.
-	Default: 1
-
 ip_nonlocal_bind - BOOLEAN
 	If set, allows processes to bind() to non-local IP addresses,
 	which can be quite useful - but may break some applications.
@@ -1309,10 +1312,6 @@ igmp_link_local_mcast_reports - BOOLEAN
 	224.0.0.X range.
 	Default TRUE
 
-nf_ipv4_defrag_skip - BOOLEAN
-	Skip defragmentation per interface if set.
-	Default : 0 (always defrag)
-
 Alexey Kuznetsov.
 kuznet@ms2.inr.ac.ru
 
@@ -1531,11 +1530,6 @@ accept_ra_mtu - BOOLEAN
 
 	Functional default: enabled if accept_ra is enabled.
 			    disabled if accept_ra is disabled.
-
-accept_ra_prefix_route - BOOLEAN
-	Set the prefix route for the autoconfigured interface address
-
-	Functional default: enabled
 
 accept_redirects - BOOLEAN
 	Accept Redirects.

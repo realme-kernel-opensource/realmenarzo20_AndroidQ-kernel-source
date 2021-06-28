@@ -17,7 +17,6 @@
 #include <linux/mmc/slot-gpio.h>
 #include <linux/module.h>
 #include <linux/slab.h>
-#include <linux/extcon.h>
 
 #include "slot-gpio.h"
 
@@ -31,23 +30,31 @@ struct mmc_gpio {
 	char cd_label[0];
 };
 
+#ifdef ODM_WT_EDIT
+//Mingyao.Xie@ODM_WT.BSP.Storage.Emmc, 2019/10/31, Modify for Sdcard
+extern unsigned int pmic_config_interface_nolock(unsigned int RegNum, unsigned int val, unsigned int MASK, unsigned int SHIFT);
+#endif
+
 static irqreturn_t mmc_gpio_cd_irqt(int irq, void *dev_id)
 {
 	/* Schedule a card detection after a debounce timeout */
 	struct mmc_host *host = dev_id;
-	int present = host->ops->get_cd(host);
-
-	pr_debug("%s: cd gpio irq, gpio state %d (CARD_%s)\n",
-		mmc_hostname(host), present, present?"INSERT":"REMOVAL");
-
+#ifdef ODM_WT_EDIT
+//Mingyao.Xie@ODM_WT.BSP.Storage.Emmc, 2019/10/31, Modify for Sdcard
+	pmic_config_interface_nolock(0x1CD8, 0x0, 0x1, 0x0); //new add to disable VMCH
+//jianmin.Niu@ODM_WT.BSP.Storage.Emmc, 2020/01/15, Modify for Sdcard
+	pmic_config_interface_nolock(0x1cc6,0x1,0x1,0);
+	pmic_config_interface_nolock(0x1cc4,0x0,0x1,0); //add here for disable VMC
+#endif
 	host->trigger_card_event = true;
+	
 #ifdef VENDOR_EDIT
-//Hexiaosen@PSW.BSP. 2019-11-30 Add for retry 5 times when new sdcard init error
-	host->detect_change_retry = 5;
+        //Lycan.Wang@Prd.BasicDrv, 2014-07-10 Add for retry 5 times when new sdcard init error
+        host->detect_change_retry = 5;
 #endif /* VENDOR_EDIT */
 
 #ifdef VENDOR_EDIT
-//yh@bsp, 2015-10-21 Add for special card compatible
+       //yh@bsp, 2015-10-21 Add for special card compatible
         host->card_stuck_in_programing_status = false;
 #endif /* VENDOR_EDIT */
 
@@ -91,15 +98,6 @@ EXPORT_SYMBOL(mmc_gpio_get_ro);
 int mmc_gpio_get_cd(struct mmc_host *host)
 {
 	struct mmc_gpio *ctx = host->slot.handler_priv;
-	int ret;
-
-	if (host->extcon) {
-		ret =  extcon_get_state(host->extcon, EXTCON_MECHANICAL);
-		if (ret < 0)
-			dev_err(mmc_dev(host), "%s: Extcon failed to check card state, ret=%d\n",
-					__func__, ret);
-		return ret;
-	}
 
 	if (!ctx || !ctx->cd_gpio)
 		return -ENOSYS;
@@ -169,6 +167,8 @@ void mmc_gpiod_request_cd_irq(struct mmc_host *host)
 			ctx->cd_label, host);
 		if (ret < 0)
 			irq = ret;
+		else
+			enable_irq_wake(irq);
 	}
 
 	host->slot.cd_irq = irq;
@@ -179,53 +179,6 @@ void mmc_gpiod_request_cd_irq(struct mmc_host *host)
 		host->slot.cd_wake_enabled = true;
 }
 EXPORT_SYMBOL(mmc_gpiod_request_cd_irq);
-
-static int mmc_card_detect_notifier(struct notifier_block *nb,
-				       unsigned long event, void *ptr)
-{
-	struct mmc_host *host = container_of(nb, struct mmc_host,
-					     card_detect_nb);
-
-	host->trigger_card_event = true;
-	mmc_detect_change(host, 0);
-
-	return NOTIFY_DONE;
-}
-
-void mmc_register_extcon(struct mmc_host *host)
-{
-	struct extcon_dev *extcon = host->extcon;
-	int err;
-
-	if (!extcon)
-		return;
-
-	host->card_detect_nb.notifier_call = mmc_card_detect_notifier;
-	err = extcon_register_notifier(extcon, EXTCON_MECHANICAL,
-				       &host->card_detect_nb);
-	if (err) {
-		dev_err(mmc_dev(host), "%s: extcon_register_notifier() failed ret=%d\n",
-			__func__, err);
-		host->caps |= MMC_CAP_NEEDS_POLL;
-	}
-}
-EXPORT_SYMBOL(mmc_register_extcon);
-
-void mmc_unregister_extcon(struct mmc_host *host)
-{
-	struct extcon_dev *extcon = host->extcon;
-	int err;
-
-	if (!extcon)
-		return;
-
-	err = extcon_unregister_notifier(extcon, EXTCON_MECHANICAL,
-					 &host->card_detect_nb);
-	if (err)
-		dev_err(mmc_dev(host), "%s: extcon_unregister_notifier() failed ret=%d\n",
-			__func__, err);
-}
-EXPORT_SYMBOL(mmc_unregister_extcon);
 
 /* Register an alternate interrupt service routine for
  * the card-detect GPIO.

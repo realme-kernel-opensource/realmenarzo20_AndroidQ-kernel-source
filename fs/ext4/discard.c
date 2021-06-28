@@ -60,7 +60,7 @@ static void __init_discard_policy(struct ext4_sb_info *sbi,
 	}
 }
 
-void ext4_stop_discard_thread(struct ext4_sb_info *sbi)
+void stop_discard_thread(struct ext4_sb_info *sbi)
 {
 	struct discard_cmd_control *dcc = sbi->dcc_info;
 
@@ -181,14 +181,14 @@ void destroy_discard_cmd_control(struct ext4_sb_info *sbi)
 	if (!dcc)
 		return;
 
-	ext4_stop_discard_thread(sbi);
+	stop_discard_thread(sbi);
 
 	if (dcc->groups_block_bitmap)
 		vfree(dcc->groups_block_bitmap);
 	kfree(dcc);
 	sbi->dcc_info = NULL;
 }
-
+extern unsigned int sysctl_ext4_async_discard_enable;
 int ext4_seq_discard_info_show(struct seq_file *seq, void *v)
 {
     struct super_block *sb = (struct super_block *) seq->private;
@@ -197,7 +197,7 @@ int ext4_seq_discard_info_show(struct seq_file *seq, void *v)
 	if (v != SEQ_START_TOKEN)
 		return 0;
     
-	if (!test_opt(sb, ASYNC_DISCARD)){
+	if (!sysctl_ext4_async_discard_enable){
 		seq_printf(seq, "async_discard option is closed !\n");
         return 0;    
     }

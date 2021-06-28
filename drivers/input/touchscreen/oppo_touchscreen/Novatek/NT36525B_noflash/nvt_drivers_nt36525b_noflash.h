@@ -75,8 +75,8 @@
 #define EVENTBUFFER_EDGE_LIMIT_VERTICAL  0x7A
 #define EVENTBUFFER_EDGE_LIMIT_LEFT_UP   0x7B
 #define EVENTBUFFER_EDGE_LIMIT_RIGHT_UP  0x7C
-#define EVENTBUFFER_GAME_ON            0x7D
-#define EVENTBUFFER_GAME_OFF           0x7E
+#define EVENTBUFFER_JITTER_ON            0x7D
+#define EVENTBUFFER_JITTER_OFF           0x7E
 
 #define EVENTBUFFER_EXT_CMD                       0x7F
 #define EVENTBUFFER_EXT_DBG_MSG_DIFF_ON           0x01
@@ -85,8 +85,6 @@
 #define EVENTBUFFER_EXT_DBG_WKG_COORD_OFF         0x04
 #define EVENTBUFFER_EXT_DBG_WKG_COORD_RECORD_ON   0x05
 #define EVENTBUFFER_EXT_DBG_WKG_COORD_RECORD_OFF  0x06
-#define EVENTBUFFER_EXT_DBG_WATER_POLLING_ON      0x07
-#define EVENTBUFFER_EXT_DBG_WATER_POLLING_OFF     0x08
 
 #define NVT_TOUCH_FW_DEBUG_INFO (1)
 #define NVT_DUMP_SRAM   (0)
@@ -126,8 +124,7 @@ typedef enum {
 typedef enum {
     DEBUG_DIFFDATA_FLAG = 0,
     DEBUG_WKG_COORD_FLAG = 1,
-    DEBUG_WKG_COORD_RECORD_FLAG = 2,
-    DEBUG_WATER_POLLING_FLAG = 3
+    DEBUG_WKG_COORD_RECORD_FLAG = 2
 } CMD_EXTEND_OFFSET;
 
 typedef enum {
@@ -277,7 +274,6 @@ struct chip_data_nt36525b {
     size_t g_fw_len;
     bool g_fw_sta;
     u8 *fw_buf_dma;
-    bool need_judge_irq_throw;
 #ifdef CONFIG_OPPO_TP_APK
 
     bool lock_point_status;
@@ -287,7 +283,6 @@ struct chip_data_nt36525b {
     bool earphone_sta;
     bool charger_sta;
     bool noise_sta;
-    int water_sta;
 #endif //end of CONFIG_OPPO_TP_APK
 };
 

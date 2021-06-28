@@ -30,12 +30,12 @@
 
 #define ohm_err(fmt, ...) \
         printk(KERN_ERR "[OHM_ERR][%s]"fmt, __func__, ##__VA_ARGS__)
+#define ohm_err_deferred(fmt, ...) \
+        printk_deferred(KERN_ERR "[OHM_ERR][%s]"fmt, __func__, ##__VA_ARGS__)
 #define ohm_debug(fmt, ...) \
         printk(KERN_INFO "[OHM_INFO][%s]"fmt, __func__, ##__VA_ARGS__)
 #define ohm_debug_deferred(fmt, ...) \
-		printk_deferred(KERN_INFO "[OHM_INFO][%s]"fmt, __func__, ##__VA_ARGS__)
-#define ohm_err_deferred(fmt, ...) \
-        printk_deferred(KERN_ERR "[OHM_ERR][%s]"fmt, __func__, ##__VA_ARGS__)
+        printk_deferred(KERN_INFO "[OHM_INFO][%s]"fmt, __func__, ##__VA_ARGS__)
 #define OHM_FLASH_TYPE_EMC 1
 #define OHM_FLASH_TYPE_UFS 2
 
@@ -46,16 +46,12 @@ enum {
         OHM_SCHED_SCHEDLATENCY,
         OHM_SCHED_FSYNC,
         OHM_SCHED_EMMCIO,
-        OHM_SCHED_DSTATE,
         OHM_SCHED_TOTAL,
         /* OTHER_TYPE 12 - */
         OHM_CPU_LOAD_CUR = OHM_SCHED_TYPE_MAX,
         OHM_MEM_MON,
         OHM_IOPANIC_MON,
-        OHM_SVM_MON,
-        OHM_RLIMIT_MON,
-        OHM_ION_MON,
-        OHM_TYPE_TOTAL
+        OHM_TYPE_TOTAL,
 };
 
 enum {
@@ -66,6 +62,4 @@ enum {
 };
 
 extern int ohm_get_cur_cpuload(bool ctrl);
-extern void ohm_action_trig_with_msg(int type, char *msg);
-
 #endif /* _OPPO_HEALTHINFO_H_*/

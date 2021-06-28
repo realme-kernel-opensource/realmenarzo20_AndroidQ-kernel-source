@@ -147,4 +147,3 @@ early_initcall(schedx_init);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("wangmengmeng <wangmengmeng@oppo.com>");
 MODULE_DESCRIPTION("optimize foreground process to promote performance");
-

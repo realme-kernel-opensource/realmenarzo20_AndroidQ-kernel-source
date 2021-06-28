@@ -991,6 +991,8 @@ static int spi_map_msg(struct spi_controller *ctlr, struct spi_message *msg)
 		if (max_tx || max_rx) {
 			list_for_each_entry(xfer, &msg->transfers,
 					    transfer_list) {
+				if (!xfer->len)
+					continue;
 				if (!xfer->tx_buf)
 					xfer->tx_buf = ctlr->dummy_tx;
 				if (!xfer->rx_buf)
@@ -1047,8 +1049,17 @@ static int spi_transfer_one_message(struct spi_controller *ctlr,
 			if (ret > 0) {
 				ret = 0;
 				ms = 8LL * 1000LL * xfer->len;
+				#ifndef VENDOR_EDIT
+				/* Yangzhenxuan@BSP.TP.FUNCTION, 2018/12/29,
+				* esd recovery need more tolerance for tp re-flash fw */
 				do_div(ms, xfer->speed_hz);
-				ms += ms + 200; /* some tolerance */
+				/* Increase spi transfer tolerance to 2s */
+				/* To aviod timeout when OS is busy.*/
+				ms += 2000;
+				#else
+				do_div(ms, xfer->speed_hz);
+				ms += ms + 1500; /* some tolerance */
+				#endif /* VENDOR_EDIT */
 
 				if (ms > UINT_MAX)
 					ms = UINT_MAX;
@@ -3503,12 +3514,7 @@ static int __init spi_init(void)
 {
 	int	status;
 
-#ifndef VENDOR_EDIT
-//#Lijie.Yang@ODM_WT.BSP.Kernel.Stability.1941873, 2020/06/08, modify for spi buf alloc flag
 	buf = kmalloc(SPI_BUFSIZ, GFP_KERNEL);
-#else
-	buf = kmalloc(SPI_BUFSIZ, GFP_KERNEL | GFP_DMA);
-#endif
 	if (!buf) {
 		status = -ENOMEM;
 		goto err0;

@@ -24,7 +24,7 @@
 #if defined(CONFIG_ARCH_MSM) || defined(CONFIG_ARCH_QCOM)
 #ifdef CONFIG_DRM_MSM
 #include <linux/msm_drm_notify.h>
-//#include <linux/dsi_oppo_support.h>
+#include <linux/dsi_oppo_support.h>
 #else
 #include "mdss_fb.h"
 #include "mdss_panel.h"
@@ -139,7 +139,7 @@ int __init display_info_register(struct hypnus_data *hypdata)
 	fb_register_client(&fb_nb);
 #endif /* CONFIG_DRM_MSM */
 #elif defined(CONFIG_MTK_PLATFORM)
-	mtkfb_register_client(&fb_nb);
+	//mtkfb_register_client(&fb_nb);
 #else
 #endif
 
@@ -167,7 +167,7 @@ void __exit display_info_unregister(struct hypnus_data *hypdata)
 	fb_unregister_client(&fb_nb);
 #endif /* CONFIG_DRM_MSM */
 #elif defined(CONFIG_MTK_PLATFORM)
-	mtkfb_unregister_client(&fb_nb);
+	//mtkfb_unregister_client(&fb_nb);
 #else
 #endif
 }

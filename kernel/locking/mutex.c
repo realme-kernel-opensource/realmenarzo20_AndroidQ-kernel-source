@@ -28,7 +28,6 @@
 #include <linux/interrupt.h>
 #include <linux/debug_locks.h>
 #include <linux/osq_lock.h>
-#include <linux/delay.h>
 
 #ifdef CONFIG_DEBUG_MUTEXES
 # include "mutex-debug.h"
@@ -45,7 +44,10 @@ __mutex_init(struct mutex *lock, const char *name, struct lock_class_key *key)
 #ifdef CONFIG_MUTEX_SPIN_ON_OWNER
 	osq_lock_init(&lock->osq);
 #endif
-
+#ifdef VENDOR_EDIT
+// Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
+    lock->ux_dep_task = NULL;
+#endif
 	debug_mutex_init(lock, name, key);
 }
 EXPORT_SYMBOL(__mutex_init);
@@ -555,17 +557,6 @@ mutex_optimistic_spin(struct mutex *lock, struct ww_acquire_ctx *ww_ctx,
 		 * values at the cost of a few extra spins.
 		 */
 		cpu_relax();
-
-		/*
-		 * On arm systems, we must slow down the waiter's repeated
-		 * aquisition of spin_mlock and atomics on the lock count, or
-		 * we risk starving out a thread attempting to release the
-		 * mutex. The mutex slowpath release must take spin lock
-		 * wait_lock. This spin lock can share a monitor with the
-		 * other waiter atomics in the mutex data structure, so must
-		 * take care to rate limit the waiters.
-		 */
-		udelay(1);
 	}
 
 	if (!waiter)
@@ -794,10 +785,17 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 	lock_contended(&lock->dep_map, ip);
 
 	if (!use_ww_ctx) {
+#ifdef VENDOR_EDIT
+// Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
+        if (sysctl_uifirst_enabled) {
+            mutex_list_add(current, &waiter.list, &lock->wait_list, lock);
+        } else {
+            list_add_tail(&waiter.list, &lock->wait_list);
+        }
+#else	
 		/* add waiting tasks to the end of the waitqueue (FIFO): */
 		list_add_tail(&waiter.list, &lock->wait_list);
-
-
+#endif
 #ifdef CONFIG_DEBUG_MUTEXES
 		waiter.ww_ctx = MUTEX_POISON_WW_CTX;
 #endif
@@ -832,8 +830,8 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 		 * against mutex_unlock() and wake-ups do not go missing.
 		 */
 		//#ifdef VENDOR_EDIT fangpan@Swdp.shanghai,2015/11/12
-		if (unlikely(signal_pending_state(state, current))
-			|| hung_long_and_fatal_signal_pending(current)) {
+		if (unlikely(signal_pending_state(state, current)) ||
+			hung_long_and_fatal_signal_pending(current)) {
 		//#endif
 			ret = -EINTR;
 			goto err;
@@ -844,8 +842,14 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 			if (ret)
 				goto err;
 		}
-
+#ifdef VENDOR_EDIT
+// Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
+        if (sysctl_uifirst_enabled) {
+            mutex_dynamic_ux_enqueue(lock, current);
+        }
+#endif
 		spin_unlock(&lock->wait_lock);
+		
 #if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
 // Liujie.Xie@TECH.Kernel.Sched, 2019/08/29, add for stuck monitor
         if (state & TASK_UNINTERRUPTIBLE) {
@@ -1077,7 +1081,12 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 
 	spin_lock(&lock->wait_lock);
 	debug_mutex_unlock(lock);
-
+#ifdef VENDOR_EDIT
+// Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
+    if (sysctl_uifirst_enabled) {
+        mutex_dynamic_ux_dequeue(lock, current);
+    }
+#endif	
 	if (!list_empty(&lock->wait_list)) {
 		/* get the first entry from the wait-list: */
 		struct mutex_waiter *waiter =

@@ -17,12 +17,11 @@
 #include <linux/mutex.h>
 #include <linux/cpufreq.h>
 #include <linux/sched/stat.h>
-#include <linux/thermal.h>
+#include <linux/sched/core_ctl.h>
 #include "kgsl.h"
 #include "kgsl_device.h"
 #include "kgsl_pwrctrl.h"
 #include "hypnus_op.h"
-#include <linux/sched/core_ctl.h>
 
 #define PM_QOS_DISABLE_SLEEP_VALUE	(43)
 
@@ -57,7 +56,6 @@ static int msm_get_boost(void)
 
 static int msm_set_boost(u32 boost)
 {
-	sched_boost_disable_all();
 	return sched_set_boost(boost);
 }
 
@@ -290,24 +288,14 @@ static int msm_get_updown_migrate(unsigned int *up_migrate,
 #endif
 }
 
-static int msm_set_updown_migrate(unsigned int *up_migrate,
-				  unsigned int *down_migrate)
+static int msm_set_updown_migrate(unsigned int up_migrate,
+				  unsigned int down_migrate)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4,9,0)
-	sched_set_updown_migrate(up_migrate, down_migrate);
-	return 0;
+	return sched_set_updown_migrate(&up_migrate, &down_migrate);
 #else
 	return -ENOTSUPP;
 #endif
-}
-
-#define DYN_THERM_RESTORE	(1)
-#define DYN_THERM_UPDATE	(2)
-static int msm_set_therm_delta(int therm_delta)
-{
-	thermal_update_trip_dynamic(DYN_THERM_RESTORE, 0);
-	thermal_update_trip_dynamic(DYN_THERM_UPDATE, therm_delta);
-	return 0;
 }
 
 static int msm_set_cpunr_limit(struct hypnus_data *pdata, unsigned int index,
@@ -340,7 +328,6 @@ static struct hypnus_chipset_operations msm_op = {
 	.set_boost = msm_set_boost,
 	.get_updown_migrate = msm_get_updown_migrate,
 	.set_updown_migrate = msm_set_updown_migrate,
-	.set_therm_delta = msm_set_therm_delta,
 };
 
 void hypnus_chipset_op_init(struct hypnus_data *pdata)

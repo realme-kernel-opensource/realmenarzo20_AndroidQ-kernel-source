@@ -30,6 +30,14 @@
 #include "xattr.h"
 #endif /* VENDOR_EDIT */
 #include <linux/sched/task.h>
+#ifdef VENDOR_EDIT
+//Jiemin.Zhu@PSW.Android.SdardFs, 2017/12/12, Add for sdcardfs delete dcim record
+#include "dellog.h"
+//Jiemin.Zhu@PSW.Android.SdardFs, 2017/12/12, Add for sdcardfs delete dcim record
+#define DCIM_DELETE_ERR  999
+//Jiemin.Zhu@AD.Android.SdcardFs, 2018/08/15, Add for using lower xattr to record uid
+#include "xattr.h"
+#endif /* VENDOR_EDIT */
 
 const struct cred *override_fsids(struct sdcardfs_sb_info *sbi,
 		struct sdcardfs_inode_data *data)
@@ -94,6 +102,9 @@ static int sdcardfs_create(struct inode *dir, struct dentry *dentry,
 	lower_dentry = lower_path.dentry;
 	lower_dentry_mnt = lower_path.mnt;
 	lower_parent_dentry = lock_parent(lower_dentry);
+
+	if (d_is_positive(lower_dentry))
+		return -EEXIST;
 
 	/* set last 16bytes of mode field to 0664 */
 	mode = (mode & S_IFMT) | 00664;
@@ -167,6 +178,15 @@ static int sdcardfs_unlink(struct inode *dir, struct dentry *dentry)
 	}
 #endif /* VENDOR_EDIT */
 
+#ifdef VENDOR_EDIT
+//Jiemin.Zhu@PSW.Android.SdardFs, 2018/08/08, Modify for adding more protected directorys
+	if (!is_oppo_skiped(info->data->oppo_flags)) {
+		if (!sdcardfs_unlink_uevent(dentry, info->data->oppo_flags)) {
+			err = DCIM_DELETE_ERR;
+			goto out_eacces;
+		}
+	}
+#endif /* VENDOR_EDIT */
 	/* save current_cred and override it */
 	saved_cred = override_fsids(SDCARDFS_SB(dir->i_sb),
 						SDCARDFS_I(dir)->data);
@@ -857,6 +877,7 @@ static int sdcardfs_getattr(const struct path *path, struct kstat *stat,
 		goto out;
 	sdcardfs_copy_and_fix_attrs(d_inode(dentry),
 			      d_inode(lower_path.dentry));
+	fsstack_copy_inode_size(dentry->d_inode, lower_path.dentry->d_inode);
 	err = sdcardfs_fillattr(mnt, d_inode(dentry), &lower_stat, stat);
 out:
 	sdcardfs_put_lower_path(dentry, &lower_path);

@@ -1358,9 +1358,6 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 	{
 		u32 meminfo[SK_MEMINFO_VARS];
 
-		if (get_user(len, optlen))
-			return -EFAULT;
-
 		sk_get_meminfo(sk, meminfo);
 
 		len = min_t(unsigned int, len, sizeof(meminfo));
@@ -2616,6 +2613,14 @@ static void sock_def_error_report(struct sock *sk)
 static void sock_def_readable(struct sock *sk)
 {
 	struct socket_wq *wq;
+#if defined(VENDOR_EDIT) && defined(CONFIG_ELSA_STUB)
+// zhoumingjun@Swdp.shanghai, 2017/07/06, add process_event_notifier_atomic support
+// and notify related modules when socket is received
+	struct process_event_data pe_data;
+	pe_data.priv = sk;
+	pe_data.reason = -1;
+	process_event_notifier_call_chain_atomic(PROCESS_EVENT_SOCKET, &pe_data);
+#endif
 
 	rcu_read_lock();
 	wq = rcu_dereference(sk->sk_wq);
@@ -2743,7 +2748,6 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 
 	sk->sk_max_pacing_rate = ~0U;
 	sk->sk_pacing_rate = ~0U;
-	sk->sk_pacing_shift = 10;
 	sk->sk_incoming_cpu = -1;
 	/*
 	 * Before updating sk_refcnt, we must commit prior changes to memory

@@ -52,13 +52,29 @@
 #include <linux/timer.h>
 #include <linux/freezer.h>
 #include <linux/compat.h>
-#include <linux/delay.h>
 
+#include <asm/cacheflush.h>
 #include <linux/uaccess.h>
 
 #include <trace/events/timer.h>
 
 #include "tick-internal.h"
+
+#ifdef CONFIG_MTK_SCHED_MONITOR
+#include "mtk_sched_mon.h"
+#endif
+
+#ifdef CONFIG_DEBUG_OBJECTS_TIMERS
+#include <mt-plat/aee.h>
+
+#define mtk_aee_kernel_warn(reason) \
+	aee_kernel_warning_api(__FILE__, __LINE__, \
+		DB_OPT_DEFAULT, \
+		reason, \
+		"[wrong hrtimer usage]")
+#else
+#define mtk_aee_kernel_warn(reason)
+#endif
 
 /*
  * The timer bases:
@@ -153,7 +169,6 @@ struct hrtimer_clock_base *lock_hrtimer_base(const struct hrtimer *timer,
 			raw_spin_unlock_irqrestore(&base->cpu_base->lock, *flags);
 		}
 		cpu_relax();
-		ndelay(TIMER_LOCK_TIGHT_LOOP_DELAY_NS);
 	}
 }
 
@@ -343,6 +358,7 @@ static bool hrtimer_fixup_init(void *addr, enum debug_obj_state state)
 
 	switch (state) {
 	case ODEBUG_STATE_ACTIVE:
+		mtk_aee_kernel_warn("re-init active hrtimer");
 		hrtimer_cancel(timer);
 		debug_object_init(timer, &hrtimer_debug_descr);
 		return true;
@@ -361,6 +377,7 @@ static bool hrtimer_fixup_activate(void *addr, enum debug_obj_state state)
 	switch (state) {
 	case ODEBUG_STATE_ACTIVE:
 		WARN_ON(1);
+		mtk_aee_kernel_warn("activate an active hrtimer");
 
 	default:
 		return false;
@@ -379,6 +396,7 @@ static bool hrtimer_fixup_free(void *addr, enum debug_obj_state state)
 	case ODEBUG_STATE_ACTIVE:
 		hrtimer_cancel(timer);
 		debug_object_free(timer, &hrtimer_debug_descr);
+		mtk_aee_kernel_warn("free an active hrtimer");
 		return true;
 	default:
 		return false;
@@ -472,11 +490,8 @@ static ktime_t __hrtimer_get_next_event(struct hrtimer_cpu_base *cpu_base,
 	unsigned int active = cpu_base->active_bases;
 	ktime_t expires, expires_next = KTIME_MAX;
 
-	/*
-	 * Skip initializing cpu_base->next_timer to NULL as we skip updating
-	 * next_timer in below loop if the timer is being exluded.
-	 */
-	if (!exclude)
+	/* Skip cpu_base update if a timer is being excluded. */
+	if (exclude == NULL)
 		hrtimer_update_next_timer(cpu_base, NULL);
 	for (; active; base++, active >>= 1) {
 		struct timerqueue_node *next;
@@ -910,9 +925,9 @@ static void __remove_hrtimer(struct hrtimer *timer,
 
 out:
 	/*
-	* We need to preserve PINNED state here, otherwise we may end up
-	* migrating pinned hrtimers as well.
-	*/
+	 * We need to preserve PINNED state here, otherwise we may end up
+	 * migrating pinned hrtimers as well.
+	 */
 	timer->state = newstate | (timer->state & HRTIMER_STATE_PINNED);
 }
 
@@ -941,7 +956,6 @@ remove_hrtimer(struct hrtimer *timer, struct hrtimer_clock_base *base, bool rest
 			state = HRTIMER_STATE_INACTIVE;
 
 		__remove_hrtimer(timer, base, state, reprogram);
-		timer->state &= ~HRTIMER_STATE_PINNED;
 		return 1;
 	}
 	return 0;
@@ -995,7 +1009,8 @@ void hrtimer_start_range_ns(struct hrtimer *timer, ktime_t tim,
 
 	/* Update pinned state */
 	timer->state &= ~HRTIMER_STATE_PINNED;
-	timer->state |= (!!(mode & HRTIMER_MODE_PINNED)) << HRTIMER_PINNED_SHIFT;
+	timer->state |=
+		(!!(mode & HRTIMER_MODE_PINNED)) << HRTIMER_PINNED_SHIFT;
 
 	leftmost = enqueue_hrtimer(timer, new_base);
 	if (!leftmost)
@@ -1048,6 +1063,34 @@ int hrtimer_try_to_cancel(struct hrtimer *timer)
 
 	unlock_hrtimer_base(timer, &flags);
 
+#if defined(CONFIG_SMP) && !defined(CONFIG_ARM64_LSE_ATOMICS)
+
+#ifndef dmac_flush_range
+#define dmac_flush_range __dma_flush_range
+#endif
+
+	/*
+	 * MTK PATCH to fix ARM v8.0 live spinlock issue.
+	 *
+	 * Flush lock value here if timer cancelling is not finished.
+	 *
+	 * In this case, Other CPU may need to get cpu_base spinlock
+	 * to update running timer information. Flush lock value here
+	 * to promise that other CPU can see correct lock value to avoid
+	 * starvation or unfair spinlock competition.
+	 */
+	if (ret == -1) {
+#ifdef CONFIG_ARM64
+		__dma_flush_area((void *)&base->cpu_base->lock,
+				   sizeof(raw_spinlock_t));
+#else
+		dmac_flush_range((void *)&base->cpu_base->lock,
+				   (void *)&base->cpu_base->lock +
+				   sizeof(raw_spinlock_t) - 1);
+#endif
+	}
+#endif
+
 	return ret;
 
 }
@@ -1069,7 +1112,6 @@ int hrtimer_cancel(struct hrtimer *timer)
 		if (ret >= 0)
 			return ret;
 		cpu_relax();
-		ndelay(TIMER_LOCK_TIGHT_LOOP_DELAY_NS);
 	}
 }
 EXPORT_SYMBOL_GPL(hrtimer_cancel);
@@ -1274,7 +1316,13 @@ static void __run_hrtimer(struct hrtimer_cpu_base *cpu_base,
 	 */
 	raw_spin_unlock(&cpu_base->lock);
 	trace_hrtimer_expire_entry(timer, now);
+#ifdef CONFIG_MTK_SCHED_MONITOR
+	mt_trace_hrt_start(fn);
+#endif
 	restart = fn(timer);
+#ifdef CONFIG_MTK_SCHED_MONITOR
+	mt_trace_hrt_end(fn);
+#endif
 	trace_hrtimer_expire_exit(timer);
 	raw_spin_lock(&cpu_base->lock);
 
@@ -1662,6 +1710,7 @@ int hrtimers_prepare_cpu(unsigned int cpu)
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
+
 static void migrate_hrtimer_list(struct hrtimer_clock_base *old_base,
 				 struct hrtimer_clock_base *new_base,
 				 bool remove_pinned)
@@ -1677,7 +1726,7 @@ static void migrate_hrtimer_list(struct hrtimer_clock_base *old_base,
 	while ((node = timerqueue_getnext(&old_base->active))) {
 		timer = container_of(node, struct hrtimer, node);
 		if (is_hotplug)
-			BUG_ON(hrtimer_callback_running(timer));
+			WARN_ON(hrtimer_callback_running(timer));
 		debug_deactivate(timer);
 
 		/*
@@ -1745,7 +1794,7 @@ static void __migrate_hrtimers(unsigned int scpu, bool remove_pinned)
 
 int hrtimers_dead_cpu(unsigned int scpu)
 {
-	BUG_ON(cpu_online(scpu));
+	WARN_ON(cpu_online(scpu));
 	tick_cancel_sched_timer(scpu);
 
 	__migrate_hrtimers(scpu, true);

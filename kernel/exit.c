@@ -68,6 +68,11 @@
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
 
+//#ifdef VENDOR_EDIT
+//zhouhengguo@BSP.Stabliity, 2019.10.14, add for aging version
+#include <soc/oppo/oppo_project.h>
+//#endif
+
 static void __unhash_process(struct task_struct *p, bool group_dead)
 {
 	nr_threads--;
@@ -193,6 +198,7 @@ repeat:
 	rcu_read_unlock();
 
 	proc_flush_task(p);
+	cgroup_release(p);
 
 	write_lock_irq(&tasklist_lock);
 	ptrace_release_task(p);
@@ -218,7 +224,6 @@ repeat:
 	}
 
 	write_unlock_irq(&tasklist_lock);
-	cgroup_release(p);
 	release_thread(p);
 	call_rcu(&p->rcu, delayed_put_task_struct);
 
@@ -226,10 +231,7 @@ repeat:
 	if (unlikely(zap_leader))
 		goto repeat;
 }
-#ifdef VENDOR_EDIT
-/*He.Lu@PSW.MM.AudioDriver.Driver, 2019/12/16, Add for sia*/
-EXPORT_SYMBOL(release_task);
-#endif
+
 /*
  * Note that if this function returns a valid task_struct pointer (!NULL)
  * task->usage must remain >0 for the duration of the RCU critical section.
@@ -523,7 +525,6 @@ static void exit_mm(void)
 {
 	struct mm_struct *mm = current->mm;
 	struct core_state *core_state;
-	int mm_released;
 
 	mm_release(current, mm);
 	if (!mm)
@@ -570,12 +571,9 @@ static void exit_mm(void)
 	enter_lazy_tlb(mm, current);
 	task_unlock(current);
 	mm_update_next_owner(mm);
-
-	mm_released = mmput(mm);
+	mmput(mm);
 	if (test_thread_flag(TIF_MEMDIE))
 		exit_oom_victim();
-	if (mm_released)
-		set_tsk_thread_flag(current, TIF_MM_RELEASED);
 }
 
 static struct task_struct *find_alive_thread(struct task_struct *p)
@@ -782,7 +780,6 @@ static void check_stack_usage(void)
 	static DEFINE_SPINLOCK(low_water_lock);
 	static int lowest_to_date = THREAD_SIZE;
 	unsigned long free;
-	int islower = false;
 
 	free = stack_not_used(current);
 
@@ -791,15 +788,11 @@ static void check_stack_usage(void)
 
 	spin_lock(&low_water_lock);
 	if (free < lowest_to_date) {
+		pr_info("%s (%d) used greatest stack depth: %lu bytes left\n",
+			current->comm, task_pid_nr(current), free);
 		lowest_to_date = free;
-		islower = true;
 	}
 	spin_unlock(&low_water_lock);
-
-	if (islower) {
-		pr_info("%s (%d) used greatest stack depth: %lu bytes left\n",
-				current->comm, task_pid_nr(current), free);
-	}
 }
 #else
 static inline void check_stack_usage(void) {}
@@ -822,7 +815,7 @@ static bool is_zygote_process(struct task_struct *t)
 }
 
 static bool is_critial_process(struct task_struct *t) {
-    if(t->group_leader && (!strcmp(t->group_leader->comm, "system_server") || is_zygote_process(t) || !strcmp(t->group_leader->comm, "surfaceflinger") || !strcmp(t->group_leader->comm, "servicemanager"))) 
+    if(t->group_leader && (!strcmp(t->group_leader->comm, "system_server") || is_zygote_process(t) || !strcmp(t->group_leader->comm, "surfaceflinger") || !strcmp(t->group_leader->comm, "servicemanager")))
     {
        if (t->pid == t->tgid)
        {
@@ -843,6 +836,11 @@ void __noreturn do_exit(long code)
 {
 	struct task_struct *tsk = current;
 	int group_dead;
+#if defined(VENDOR_EDIT) && defined(CONFIG_ELSA_STUB)
+//zhoumingjun@Swdp.shanghai, 2017/04/19, add process_event_notifier support
+	struct process_event_data pe_data;
+#endif
+
 //#ifdef VENDOR_EDIT
 //Haoran.Zhang@PSW.AD.Stability.Crash.1052210, 2016/05/24, Add for debug critical svc crash
     if (is_critial_process(tsk)) {
@@ -851,6 +849,14 @@ void __noreturn do_exit(long code)
 //#endif /*VENDOR_EDIT*/
 
 	profile_task_exit(tsk);
+#if defined(VENDOR_EDIT)
+//zhouhengguo@BSP.Stabliity, 2019.10.14, add for aging version
+	if(get_eng_version() == 1) {
+/*xing.xiong@BSP.Kernel.Debug, 2018/10/25, Add for aging*/
+		printk("[%d:%s] exit\n", tsk->pid, tsk->comm);
+	}
+//#endif
+#endif
 	kcov_task_exit(tsk);
 
 	WARN_ON(blk_needs_flush_plug(tsk));
@@ -873,16 +879,19 @@ void __noreturn do_exit(long code)
 
 	validate_creds_for_do_exit(tsk);
 
+#if defined(VENDOR_EDIT) && defined(CONFIG_ELSA_STUB)
+//zhoumingjun@Swdp.shanghai, 2017/04/19, add process_event_notifier support
+	pe_data.pid = tsk->pid;
+	pe_data.uid = tsk->real_cred->uid;
+	pe_data.reason = code;
+	process_event_notifier_call_chain(PROCESS_EVENT_EXIT, &pe_data);
+#endif
 	/*
 	 * We're taking recursive faults here in do_exit. Safest is to just
 	 * leave this task alone and wait for reboot.
 	 */
 	if (unlikely(tsk->flags & PF_EXITING)) {
-#ifdef CONFIG_PANIC_ON_RECURSIVE_FAULT
-		panic("Recursive fault!\n");
-#else
 		pr_alert("Fixing recursive fault but reboot is needed!\n");
-#endif
 		/*
 		 * We can do this unlocked here. The futex code uses
 		 * this flag just to verify whether the pi state
@@ -898,7 +907,6 @@ void __noreturn do_exit(long code)
 	}
 
 	exit_signals(tsk);  /* sets PF_EXITING */
-	sched_exit(tsk);
 	/*
 	 * Ensure that all new tsk->pi_lock acquisitions must observe
 	 * PF_EXITING. Serializes against futex.c:attach_to_pi_owner().
@@ -965,6 +973,7 @@ void __noreturn do_exit(long code)
 
 	sched_autogroup_exit_task(tsk);
 	cgroup_exit(tsk);
+	uclamp_exit_task(tsk);
 
 	/*
 	 * FIXME: do that only when needed, using sched_exit tracepoint

@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * SPDX-License-Identifier: GPL-2.0
  * This module exports the functions:
  *
  *     'int set_selection(struct tiocl_selection __user *, struct tty_struct *)'
@@ -330,19 +329,18 @@ static int __set_selection(const struct tiocl_selection __user *sel,
 }
 
 int set_selection(const struct tiocl_selection __user *v,
-       struct tty_struct *tty)
+	struct tty_struct *tty)
 {
 	int ret;
 
 	mutex_lock(&sel_lock);
 	console_lock();
-	et = __set_selection(v, tty);
+	ret = __set_selection(v, tty);
 	console_unlock();
 	mutex_unlock(&sel_lock);
 
 	return ret;
 }
-
 
 /* Insert the contents of the selection buffer into the
  * queue of the tty associated with the current console.
@@ -373,7 +371,9 @@ int paste_selection(struct tty_struct *tty)
 	while (sel_buffer && sel_buffer_lth > pasted) {
 		set_current_state(TASK_INTERRUPTIBLE);
 		if (tty_throttled(tty)) {
+			mutex_unlock(&sel_lock);
 			schedule();
+			mutex_lock(&sel_lock);
 			continue;
 		}
 		__set_current_state(TASK_RUNNING);

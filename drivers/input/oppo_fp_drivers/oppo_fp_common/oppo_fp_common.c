@@ -11,15 +11,46 @@
  ** Author: Ran.Chen@Prd.BaseDrv
  **
  ** --------------------------- Revision History: --------------------------------
- **  <author>             <data>             <desc>
- ** Qingwen.Liu       2019/05/12       add for 19631 19026 fpc1511
+ **  <author>         <data>         <desc>
+ **  Ran.Chen       2018/05/23     create the file,add goodix_optical_95s
+ **  Ran.Chen       2018/05/28     add for fpc1023
+ **  Ran.Chen       2018/06/15     add for Silead_Optical_fp
+ **  Ran.Chen       2018/06/25     modify fpc1023+2060 to fpc1023_glass
+ **  Ziqing.Guo     2018/07/12     add Silead_Optical_fp for 18181 18385
+ **  Ziqing.Guo     2018/07/13     set silead fp for 18181 18385 at this moment, will modify later
+ **  Ran.Chen       2018/08/01     modify for 18385 fp_id
+ **  Long.Liu       2018/09/29     add 18531 FPC1023 fp_id
+ **  Dongnan.Wu     2018/10/23	   modify for 17081(android P) fp_id
+ **  Long.Liu       2018/11/15     modify for 18151 FPC1023_GLASS fp_id
+ **  Ran.Chen       2018/11/26     add for SDM855
+ **  Yang.Tan       2018/11/09     add for 18531 fpc1511
+ **  Long.Liu       2019/01/03     add for 18161 fpc1511
+ **  Bangxiong.wu   2019/01/24     add for 18073 silead_optical_fp
+ **  Long.Liu       2019/02/01     add for 18561 GOODIX GF5658_FP
+ **  Ziqing.Guo     2019/02/12     fix coverity error 64261,64267 to avoid buffer overflow
+ **  Dongnan.Wu     2019/01/28     add for 18073 goodix optical fingerprint
+ **  Bangxiong.wu   2019/02/24     add for 18593 silead_optical_fp
+ **  Qing.Guan      2019/04/01     add for egis et711 fp
+ **  Hongyu.lu      2019/04/18     add for 19021 fpc1511
+ **  Hongyu.lu      2019/04/18     add for 19321 19026 fpc1511
+ **  Long.Liu       2019/05/08     add for 17085(android P) fp_id
+ **  Qing.Guan      2019/05/08     add for 18081 silead fp O to P
+ **  Bangxiong.Wu   2019/05/10     add for SM7150 (MSM_19031 MSM_19331)
+ **  Bangxiong.Wu   2019/05/16     enable optical GF irq handle for SM7150(MSM_19031 MSM_19331)
+ **  Dongnan.Wu     2019/05/21     add for 19011&19301 platform
+ **  Hongyu.lu      2019/05/24     add for 19328 platform
+ **  Bangxiong.Wu   2019/06/03     add for MSM_19111 MSM_19513
+ **  Qijia.Zhou     2019/06/12     add for 19531 platform
+ **  Qijia.Zhou     2019/10/02     add for 19151 19350
+ ##  oujinrong      2019/10/08     add for 19053
  ************************************************************************************/
 
 #include <linux/module.h>
 #include <linux/proc_fs.h>
-#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6763 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6771 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6779
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6763 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6771 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6779 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6785 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6768
 #include <sec_boot_lib.h>
-#elif CONFIG_OPPO_FINGERPRINT_PLATFORM == 855 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6125
+#include <linux/uaccess.h>
+#elif CONFIG_OPPO_FINGERPRINT_PLATFORM == 855 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6125 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 7150
 #include <linux/uaccess.h>
 #else
 #include <soc/qcom/smem.h>
@@ -47,10 +78,25 @@
 
 #define CHIP_UNKNOWN    "unknown"
 
-#define ENGINEER_MENU_FPC1511  "-1,-1"  /* content in " " represents SNR,inclination test item in order in engineer menu, and -1/1 means off/on */
-#define ENGINEER_MENU_EGIS520  "-1,-1"
-#define ENGINEER_MENU_GSL6150  "-1,-1"
-
+#define ENGINEER_MENU_FPC1140  "-1,-1"  /* content in " " represents SNR,inclination test item in order in engineer menu, and -1/1 means off/on */
+#define ENGINEER_MENU_FPC1022  "-1,-1"
+#define ENGINEER_MENU_FPC1023  "1,-1"
+#define ENGINEER_MENU_FPC1260  "1,-1"
+#define ENGINEER_MENU_FPC1270  "-1,-1"
+#define ENGINEER_MENU_FPC1511  "-1,-1"
+#define ENGINEER_MENU_FPC1541   "-1,-1"
+#define ENGINEER_MENU_GOODIX   "1,1"
+#define ENGINEER_MENU_GOODIX_3626   "-1,-1"
+#define ENGINEER_MENU_GOODIX_3268   "-1,-1"
+#define ENGINEER_MENU_GOODIX_5288   "-1,-1"
+#define ENGINEER_MENU_GOODIX_5228   "-1,-1"
+#define ENGINEER_MENU_GOODIX_OPTICAL   "-1,-1"
+#define ENGINEER_MENU_SILEAD_OPTICAL   "-1,-1"
+#define ENGINEER_MENU_EGIS_OPTICAL  "-1,-1"
+#define ENGINEER_MENU_GOODIX_5298   "-1,-1"
+#define ENGINEER_MENU_GOODIX_5658   "-1,-1"
+#define ENGINEER_MENU_EGIS_520  	"-1,-1"
+#define ENGINEER_MENU_SILEAD_6150   "-1,-1"
 #define ENGINEER_MENU_DEFAULT  "-1,-1"
 
 static struct proc_dir_entry *fp_id_dir = NULL;
@@ -62,24 +108,27 @@ static char fp_manu[FP_ID_MAX_LENGTH] = CHIP_UNKNOWN; /* the length of this stri
 
 static struct fp_data *fp_data_ptr = NULL;
 char g_engineermode_menu_config[ENGINEER_MENU_SELECT_MAXLENTH] = ENGINEER_MENU_DEFAULT;
-#ifdef CONFIG_OPTICAL_IRQ_HANDLER
-extern int silfp_opticalfp_irq_handler(struct fp_underscreen_info* tp_info);
-extern int gf_opticalfp_irq_handler(struct fp_underscreen_info* tp_info);
-#if CONFIG_OPPO_FINGERPRINT_PROJCT == 18041
-extern int egis_opticalfp_irq_handler(struct fp_underscreen_info* tp_info);
-#endif
+
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6768
+	int g_fingerprint = -1;
 #endif
 
-#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6125
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6785
+
 fp_module_config_t fp_module_config_list[] = {
-	{{1, -1, -1},  FP_FPC_1511, CHIP_FPC,  ENGINEER_MENU_FPC1511},
-	{{1,  0, -1},  FP_EGIS_520, CHIP_EGIS, ENGINEER_MENU_EGIS520},
-	{{0, -1, -1},  FP_SILEAD_6150, CHIP_SILEAD, ENGINEER_MENU_GSL6150},
+    {{1, -1, -1},  FP_GOODIX_3626,  CHIP_GOODIX,   ENGINEER_MENU_GOODIX_3626},
+    {{0, -1, -1},  FP_FPC_1541,     CHIP_FPC,      ENGINEER_MENU_FPC1541},
+};
+#elif CONFIG_OPPO_FINGERPRINT_PLATFORM == 6768
+fp_module_config_t fp_module_config_list[] = {
+	{{1, -1, -1},  FP_EGIS_520,    	CHIP_EGIS,    ENGINEER_MENU_EGIS_520},
+	{{0, -1, -1},  FP_SILEAD_6150,	CHIP_SILEAD,  ENGINEER_MENU_SILEAD_6150},
 };
 #else
 fp_module_config_t fp_module_config_list[] = {
-	{{1, -1, -1},  FP_UNKNOWN, CHIP_UNKNOWN, ENGINEER_MENU_DEFAULT},
-};
+    {{1, -1, -1},  FP_UNKNOWN,    	CHIP_UNKNOWN,     ENGINEER_MENU_FPC1023},
+    {{1, -1, -1},  FP_UNKNOWN,    	CHIP_UNKNOWN,     ENGINEER_MENU_FPC1023},
+
 #endif
 
 static int fp_request_named_gpio(struct fp_data *fp_data,
@@ -114,36 +163,42 @@ static int fp_gpio_parse_dts(struct fp_data *fp_data)
         ret = FP_ERROR_GENERAL;
         goto exit;
     }
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6768
 
-#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6125
-    dev_err(fp_data->dev,"%s",__func__);
-    ret = fp_request_named_gpio(fp_data, "oppo,fp-id1", &fp_data->gpio_id0);
-    if (ret) {
-        ret = FP_ERROR_GPIO;
-        goto exit;
-    }
-#else
+         if (fp_data->pdev) {
+			fp_data->gpio_id0_pinctrl = devm_pinctrl_get(fp_data->dev);
+			if (IS_ERR(fp_data->gpio_id0_pinctrl)) {
+				ret = PTR_ERR(fp_data->gpio_id0_pinctrl);
+				pr_err("%s can't find gpio_id0_pinctrl pinctrl\n", __func__);
+				return ret;
+			}
+		} else {
+			pr_err("%s platform device is null\n", __func__);
+			return -1;
+		}
+#endif
+
+
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6785
+		if (fp_data->pdev) {
+			fp_data->gpio_id0_pinctrl = devm_pinctrl_get(fp_data->dev);
+			if (IS_ERR(fp_data->gpio_id0_pinctrl)) {
+				ret = PTR_ERR(fp_data->gpio_id0_pinctrl);
+				pr_err("%s can't find gpio_id0_pinctrl pinctrl\n", __func__);
+				return ret;
+			}
+		} else {
+			pr_err("%s platform device is null\n", __func__);
+			return -1;
+		}
+#endif
+
     ret = fp_request_named_gpio(fp_data, "oppo,fp-id0",
             &fp_data->gpio_id0);
     if (ret) {
         ret = FP_ERROR_GPIO;
         goto exit;
     }
-
-    ret = fp_request_named_gpio(fp_data, "oppo,fp-id1",
-            &fp_data->gpio_id1);
-    if (ret) {
-        ret = FP_ERROR_GPIO;
-        goto exit;
-    }
-
-    ret = fp_request_named_gpio(fp_data, "oppo,fp-id2",
-            &fp_data->gpio_id2);
-    if (ret) {
-        ret = FP_ERROR_GPIO;
-        goto exit;
-    }
-#endif
 
 exit:
     return ret;
@@ -205,21 +260,26 @@ static int fp_get_matched_chip_module(struct device *dev, int fp_id1, int fp_id2
                 (fp_module_config_list[i].gpio_id_config_list[1] == fp_id2) &&
                 (fp_module_config_list[i].gpio_id_config_list[2] == fp_id3)) {
             switch (fp_module_config_list[i].fp_vendor_chip) {
-                case FP_FPC_1511:
+                case FP_FPC_1541:
                     strncpy(fp_manu, CHIP_FPC, FP_ID_MAX_LENGTH - FP_ID_SUFFIX_MAX_LENGTH);
-                    strncat(fp_manu, "_1511", FP_ID_SUFFIX_MAX_LENGTH - 1);
+                    strncat(fp_manu, "_1541", FP_ID_SUFFIX_MAX_LENGTH - 1);
                     strncpy(g_engineermode_menu_config, fp_module_config_list[i].engineermode_menu_config, ENGINEER_MENU_SELECT_MAXLENTH - 1);
-                    return FP_FPC_1511;
+                    return FP_FPC_1541;
+                case FP_GOODIX_3626:
+                    strncpy(fp_manu, CHIP_GOODIX, FP_ID_MAX_LENGTH - FP_ID_SUFFIX_MAX_LENGTH);
+                    strncat(fp_manu, "_3626", FP_ID_SUFFIX_MAX_LENGTH - 1);
+                    strncpy(g_engineermode_menu_config, fp_module_config_list[i].engineermode_menu_config, ENGINEER_MENU_SELECT_MAXLENTH - 1);
+                    return FP_GOODIX_3626;
                 case FP_EGIS_520:
                     strncpy(fp_manu, CHIP_EGIS, FP_ID_MAX_LENGTH - FP_ID_SUFFIX_MAX_LENGTH);
                     strncat(fp_manu, "_520", FP_ID_SUFFIX_MAX_LENGTH - 1);
                     strncpy(g_engineermode_menu_config, fp_module_config_list[i].engineermode_menu_config, ENGINEER_MENU_SELECT_MAXLENTH - 1);
-					return FP_EGIS_520;
-				case FP_SILEAD_6150:
+                    return FP_EGIS_520;
+                case FP_SILEAD_6150:
                     strncpy(fp_manu, CHIP_SILEAD, FP_ID_MAX_LENGTH - FP_ID_SUFFIX_MAX_LENGTH);
                     strncat(fp_manu, "_6150", FP_ID_SUFFIX_MAX_LENGTH - 1);
                     strncpy(g_engineermode_menu_config, fp_module_config_list[i].engineermode_menu_config, ENGINEER_MENU_SELECT_MAXLENTH - 1);
-					return FP_SILEAD_6150;
+                    return FP_SILEAD_6150;
                 default:
                     dev_err(dev, "gpio ids matched but no matched vendor chip!");
                     return FP_UNKNOWN;
@@ -231,50 +291,80 @@ static int fp_get_matched_chip_module(struct device *dev, int fp_id1, int fp_id2
     return FP_UNKNOWN;
 }
 
-#ifdef CONFIG_OPTICAL_IRQ_HANDLER
-int opticalfp_irq_handler(struct fp_underscreen_info* tp_info)
-{
-    fp_vendor_t fpsensor_type = get_fpsensor_type();
-    if (FP_SILEAD_OPTICAL_70 == fpsensor_type) {
-        return silfp_opticalfp_irq_handler(tp_info);
-    } else if (FP_GOODIX_OPTICAL_95 == fpsensor_type) {
-        return gf_opticalfp_irq_handler(tp_info);
-    } 
-#if CONFIG_OPPO_FINGERPRINT_PROJCT == 18041
-    else if (FP_EGIS_OPTICAL_ET713 == fpsensor_type) {
-        return egis_opticalfp_irq_handler(tp_info);
-    }
-#endif
-    else {
-        return FP_UNKNOWN;
-    }
-}
-#endif
-
 static int fp_register_proc_fs(struct fp_data *fp_data)
 {
     uint32_t fp_id_retry;
-    unsigned int project = get_project();
     fp_id_retry = 0;
-#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6125
-    dev_err(fp_data->dev,"%s project = %d",__func__,project);
-    fp_data->fp_id0 = gpio_get_value(fp_data->gpio_id0);
-    fp_data->fp_id1 = -1;
-    fp_data->fp_id2 = -1;
-#else
-    fp_data->fp_id0 = gpio_get_value(fp_data->gpio_id0);
-    fp_data->fp_id1 = gpio_get_value(fp_data->gpio_id1);
-    fp_data->fp_id2 = gpio_get_value(fp_data->gpio_id2);
+
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6785
+    int fp_id_pull_up_value = 0;
+    int fp_id_pull_down_value = 0;
 #endif
 
-    if((19743 == project) || (20667 == project)) {
-		fp_data->fp_id0 = gpio_get_value(fp_data->gpio_id0);
-		if (fp_data->fp_id0 == 0)
-			fp_data->fp_id1 = -1;
-		else 
-			fp_data->fp_id1 = 0;
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6768
+
+	fp_data->gpio_id0_pull_up = pinctrl_lookup_state(fp_data->gpio_id0_pinctrl, "gpio_id0_up");
+	if (IS_ERR(fp_data->gpio_id0_pull_up)) {
+			dev_err(fp_data->dev, "Can't find gpio_id0_pull_up pinctrl state\n");
+			return PTR_ERR(fp_data->gpio_id0_pull_up);
 	}
-       
+	
+	fp_data->gpio_id0_pull_down = pinctrl_lookup_state(fp_data->gpio_id0_pinctrl, "gpio_id0_down");
+	if (IS_ERR(fp_data->gpio_id0_pull_down)) {
+			dev_err(fp_data->dev, "Can't find gpio_id0_pull_down pinctrl state\n");
+			return PTR_ERR(fp_data->gpio_id0_pull_down);
+	}
+
+	gpio_direction_output(fp_data->gpio_id0, 1);
+	pinctrl_select_state(fp_data->gpio_id0_pinctrl, fp_data->gpio_id0_pull_up);
+	gpio_direction_input(fp_data->gpio_id0);
+	mdelay(2);
+
+	fp_data->fp_id0 = gpio_get_value(fp_data->gpio_id0);
+    g_fingerprint = fp_data->fp_id0;
+	
+    gpio_direction_output(fp_data->gpio_id0, 0);
+	pinctrl_select_state(fp_data->gpio_id0_pinctrl, fp_data->gpio_id0_pull_down);
+	gpio_direction_input(fp_data->gpio_id0);
+#endif
+
+
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6785
+
+	fp_data->gpio_id0_pull_up = pinctrl_lookup_state(fp_data->gpio_id0_pinctrl, "gpio_id0_pull_up");
+	if (IS_ERR(fp_data->gpio_id0_pull_up)) {
+			dev_err(fp_data->dev, "Can't find gpio_id0_pull_up pinctrl state\n");
+			return PTR_ERR(fp_data->gpio_id0_pull_up);
+	}
+	fp_data->gpio_id0_pull_down = pinctrl_lookup_state(fp_data->gpio_id0_pinctrl, "gpio_id0_pull_down");
+	if (IS_ERR(fp_data->gpio_id0_pull_down)) {
+			dev_err(fp_data->dev, "Can't find gpio_id0_pull_down pinctrl state\n");
+			return PTR_ERR(fp_data->gpio_id0_pull_down);
+	}
+	gpio_direction_output(fp_data->gpio_id0, 1);
+	pinctrl_select_state(fp_data->gpio_id0_pinctrl, fp_data->gpio_id0_pull_up);
+	gpio_direction_input(fp_data->gpio_id0);
+	fp_id_pull_up_value = gpio_get_value(fp_data->gpio_id0);
+
+	gpio_direction_output(fp_data->gpio_id0, 0);
+	pinctrl_select_state(fp_data->gpio_id0_pinctrl, fp_data->gpio_id0_pull_down);
+	gpio_direction_input(fp_data->gpio_id0);
+	fp_id_pull_down_value = gpio_get_value(fp_data->gpio_id0);
+
+	if(fp_id_pull_up_value == 1 && fp_id_pull_down_value == 0){
+		fp_data->fp_id0 = 1;
+	}else if(fp_id_pull_up_value == 0 && fp_id_pull_down_value == 0){
+		fp_data->fp_id0 = 0;
+	}else if(fp_id_pull_up_value == 1 && fp_id_pull_down_value == 1){
+	    fp_data->fp_id0 = 1;
+	}
+    dev_err(fp_data->dev, "fp_register_proc_fs check: fp_id_pull_up_value=%d, fp_id_pull_down_value=%d: fp_id0= %d\n", \
+            fp_id_pull_up_value, fp_id_pull_down_value,fp_data->fp_id0 );
+#endif
+
+    fp_data->fp_id1 = -1;
+    fp_data->fp_id2 = -1;
+
     dev_err(fp_data->dev, "fp_register_proc_fs check: fp_id0= %d, fp_id1= %d, fp_id2= %d, fp_id3 = %d, fp_id_retry= %d\n", \
             fp_data->fp_id0, fp_data->fp_id1, fp_data->fp_id2, fp_data->fp_id3, fp_id_retry);
 
@@ -309,7 +399,7 @@ static int oppo_fp_common_probe(struct platform_device *fp_dev)
     int ret = 0;
     struct device *dev = &fp_dev->dev;
     struct fp_data *fp_data = NULL;
-
+    dev_err(dev, "line = %d: --- %s ---\n",__LINE__,__func__);
     fp_data = devm_kzalloc(dev, sizeof(struct fp_data), GFP_KERNEL);
     if (fp_data == NULL) {
         dev_err(dev, "fp_data kzalloc failed\n");
@@ -318,13 +408,20 @@ static int oppo_fp_common_probe(struct platform_device *fp_dev)
     }
 
     fp_data->dev = dev;
+	
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6768
+    fp_data->pdev = fp_dev;
+#endif
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6785
+    fp_data->pdev = fp_dev;
+#endif
     fp_data_ptr = fp_data;
     ret = fp_gpio_parse_dts(fp_data);
     if (ret) {
         goto exit;
     }
 
-#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6763 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6771 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6779
+#if CONFIG_OPPO_FINGERPRINT_PLATFORM == 6763 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6771 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6779 || CONFIG_OPPO_FINGERPRINT_PLATFORM == 6785
     msleep(20);
 #endif
 
@@ -374,17 +471,14 @@ static struct platform_driver oppo_fp_common_driver = {
 };
 
 static int __init oppo_fp_common_init(void)
-{
+{   printk("line = kkkkk  %d: --- %s ---\n",__LINE__,__func__);
     return platform_driver_register(&oppo_fp_common_driver);
 }
 
 static void __exit oppo_fp_common_exit(void)
-{
+{   printk("line =kkkk %d: --- %s ---\n",__LINE__,__func__);
     platform_driver_unregister(&oppo_fp_common_driver);
 }
 
-#ifdef CONFIG_OPTICAL_IRQ_HANDLER
-EXPORT_SYMBOL(opticalfp_irq_handler);
-#endif
-fs_initcall(oppo_fp_common_init);
+subsys_initcall(oppo_fp_common_init);
 module_exit(oppo_fp_common_exit)

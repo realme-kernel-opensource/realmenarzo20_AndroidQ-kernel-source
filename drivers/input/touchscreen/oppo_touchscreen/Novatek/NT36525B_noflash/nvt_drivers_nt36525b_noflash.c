@@ -306,12 +306,10 @@ static int nvt_esd_handle(void *chip_data)
         TPD_INFO("do ESD recovery, timer = %d, retry = %d\n", timer, chip_info->esd_retry);
         /* do esd recovery, bootloader reset */
         nvt_reset(chip_info);
-        tp_touch_btnkey_release();
         /* update interrupt timer */
         chip_info->irq_timer = jiffies;
         /* update esd_retry counter */
         chip_info->esd_retry++;
-        return -1;
     }
 
     return 0;
@@ -459,9 +457,10 @@ Description:
 return:
         Executive outcomes. 0---success. -1---fail.
 *******************************************************/
-static void nvt_read_pid_noflash(struct chip_data_nt36525b *chip_info)
+static int32_t nvt_read_pid_noflash(struct chip_data_nt36525b *chip_info)
 {
-    uint8_t buf[4] = {0};
+    uint8_t buf[3] = {0};
+    int32_t ret = 0;
 
     //---set xdata index to EVENT BUF ADDR---
     nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR | EVENT_MAP_PROJECTID);
@@ -479,6 +478,7 @@ static void nvt_read_pid_noflash(struct chip_data_nt36525b *chip_info)
 
     TPD_DETAIL("PID=%04X\n", chip_info->nvt_pid);
 
+    return ret;
 }
 
 static int32_t nvt_get_fw_info_noflash(struct chip_data_nt36525b *chip_info)
@@ -590,13 +590,21 @@ static int32_t nvt_bin_header_parser(struct chip_data_nt36525b *chip_info, const
             chip_info->bin_map[list].BIN_addr = byte_to_word(&fwdata[0 + list * 12]);
             chip_info->bin_map[list].SRAM_addr = byte_to_word(&fwdata[4 + list * 12]);
             chip_info->bin_map[list].size = byte_to_word(&fwdata[8 + list * 12]);
-            if (chip_info->trim_id_table.support_hw_crc) {
+            if (chip_info->trim_id_table.support_hw_crc)
                 chip_info->bin_map[list].crc = byte_to_word(&fwdata[0x18 + list * 4]);
-            }
+            else { //ts->support_hw_crc
+                if ((chip_info->bin_map[list].BIN_addr + chip_info->bin_map[list].size) < fwsize)
+                    chip_info->bin_map[list].crc = CheckSum(&fwdata[chip_info->bin_map[list].BIN_addr], chip_info->bin_map[list].size);
+                else {
+                    TPD_INFO("access range (0x%08X to 0x%08X) is larger than bin size!\n",
+                             chip_info->bin_map[list].BIN_addr, chip_info->bin_map[list].BIN_addr + chip_info->bin_map[list].size);
+                    return -EINVAL;
+                }
+            } //ts->support_hw_crc
             if (list == 0)
-                snprintf(chip_info->bin_map[list].name, 12, "ILM");
+                sprintf(chip_info->bin_map[list].name, "ILM");
             else if (list == 1)
-                snprintf(chip_info->bin_map[list].name, 12, "DLM");
+                sprintf(chip_info->bin_map[list].name, "DLM");
         }
 
         /*
@@ -610,14 +618,22 @@ static int32_t nvt_bin_header_parser(struct chip_data_nt36525b *chip_info, const
             chip_info->bin_map[list].SRAM_addr = byte_to_word(&fwdata[pos]);
             chip_info->bin_map[list].size = byte_to_word(&fwdata[pos + 4]);
             chip_info->bin_map[list].BIN_addr = byte_to_word(&fwdata[pos + 8]);
-            if (chip_info->trim_id_table.support_hw_crc) {
+            if (chip_info->trim_id_table.support_hw_crc)
                 chip_info->bin_map[list].crc = byte_to_word(&fwdata[pos + 12]);
-            }
+            else {
+                if ((chip_info->bin_map[list].BIN_addr + chip_info->bin_map[list].size) < fwsize)
+                    chip_info->bin_map[list].crc = CheckSum(&fwdata[chip_info->bin_map[list].BIN_addr], chip_info->bin_map[list].size);
+                else { //ts->support_hw_crc
+                    TPD_INFO("access range (0x%08X to 0x%08X) is larger than bin size!\n",
+                             chip_info->bin_map[list].BIN_addr, chip_info->bin_map[list].BIN_addr + chip_info->bin_map[list].size);
+                    return -EINVAL;
+                }
+            } //ts->support_hw_crc
             /* detect header end to protect parser function */
             if ((chip_info->bin_map[list].BIN_addr == 0) && (chip_info->bin_map[list].size != 0)) {
-                snprintf(chip_info->bin_map[list].name, 12, "Header");
+                sprintf(chip_info->bin_map[list].name, "Header");
             } else {
-                snprintf(chip_info->bin_map[list].name, 12, "Info-%d", (list - chip_info->ilm_dlm_num));
+                sprintf(chip_info->bin_map[list].name, "Info-%d", (list - chip_info->ilm_dlm_num));
             }
         }
 
@@ -632,10 +648,18 @@ static int32_t nvt_bin_header_parser(struct chip_data_nt36525b *chip_info, const
             chip_info->bin_map[list].SRAM_addr = byte_to_word(&fwdata[pos]);
             chip_info->bin_map[list].size = byte_to_word(&fwdata[pos + 4]);
             chip_info->bin_map[list].BIN_addr = byte_to_word(&fwdata[pos + 8]);
-            if (chip_info->trim_id_table.support_hw_crc) {
+            if (chip_info->trim_id_table.support_hw_crc)
                 chip_info->bin_map[list].crc = byte_to_word(&fwdata[pos + 12]);
-            }
-            snprintf(chip_info->bin_map[list].name, 12, "Overlay-%d", (list - chip_info->ilm_dlm_num - info_sec_num));
+            else { //ts->support_hw_crc
+                if ((chip_info->bin_map[list].BIN_addr + chip_info->bin_map[list].size) < fwsize)
+                    chip_info->bin_map[list].crc = CheckSum(&fwdata[chip_info->bin_map[list].BIN_addr], chip_info->bin_map[list].size);
+                else {
+                    TPD_INFO("access range (0x%08X to 0x%08X) is larger than bin size!\n",
+                             chip_info->bin_map[list].BIN_addr, chip_info->bin_map[list].BIN_addr + chip_info->bin_map[list].size);
+                    return -EINVAL;
+                }
+            } //ts->support_hw_crc
+            sprintf(chip_info->bin_map[list].name, "Overlay-%d", (list - chip_info->ilm_dlm_num - info_sec_num));
         }
 
         /* BIN size error detect */
@@ -690,7 +714,7 @@ static void nvt_read_ram_test(struct chip_data_nt36525b *chip_info, uint32_t add
     struct file *fp = NULL;
     mm_segment_t org_fs;
 
-    snprintf(file, 256, "/sdcard/dump_%s.bin", name);
+    sprintf(file, "/sdcard/dump_%s.bin", name);
     TPD_INFO("Dump [%s] from 0x%08X to 0x%08X\n", file, addr, addr + len);
 
     fbufp = (uint8_t *)kzalloc(len + 1, GFP_KERNEL);
@@ -902,22 +926,44 @@ Description:
 return:
     N/A.
 *******************************************************/
-static void nvt_fw_crc_enable(struct chip_data_nt36525b *chip_info)
+static int8_t nvt_fw_crc_enable(struct chip_data_nt36525b *chip_info)
 {
     uint8_t buf[4] = {0};
+    int32_t i = 0;
+    const int32_t retry = 10;
 
-    //---set xdata index to EVENT BUF ADDR---
-    nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
+    for (i = 0; i < retry; i++) {
+        //---set xdata index to EVENT BUF ADDR---
+        nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
 
-    //---clear fw reset status---
-    buf[0] = EVENT_MAP_RESET_COMPLETE & (0x7F);
-    buf[1] = 0x00;
-    CTP_SPI_WRITE(chip_info->s_client, buf, 2);
+        //---clear fw reset status---
+        buf[0] = EVENT_MAP_RESET_COMPLETE & (0x7F);
+        buf[1] = 0x00;
+        CTP_SPI_WRITE(chip_info->s_client, buf, 2);
 
-    //---enable fw crc---
-    buf[0] = EVENT_MAP_HOST_CMD & (0x7F);
-    buf[1] = 0xAE;  //enable fw crc command
-    CTP_SPI_WRITE(chip_info->s_client, buf, 2);
+        //---enable fw crc---
+        buf[0] = EVENT_MAP_HOST_CMD & (0x7F);
+        buf[1] = 0xAE;  //enable fw crc command
+        CTP_SPI_WRITE(chip_info->s_client, buf, 2);
+
+        //---set xdata index to EVENT BUF ADDR---
+        nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
+
+        //---read data from index---
+        buf[0] = EVENT_MAP_RESET_COMPLETE & (0x7F);
+        buf[1] = 0xFF;
+        CTP_SPI_READ(chip_info->s_client, buf, 2);
+        if (buf[1] == 0x00) {
+            break;
+        }
+    }
+
+    if (i >= retry) {
+        TPD_INFO("failed, i=%d, buf[1]=0x%02X\n", i, buf[1]);
+        return -1;
+    } else {
+        return 0;
+    }
 }
 
 /*******************************************************
@@ -933,6 +979,14 @@ static void nvt_boot_ready(struct chip_data_nt36525b *chip_info, uint8_t ready)
     nvt_write_addr(chip_info->s_client, chip_info->trim_id_table.mmap->BOOT_RDY_ADDR, 1);
 
     mdelay(5);
+
+    if (!chip_info->trim_id_table.support_hw_crc) {
+        //---write BOOT_RDY status cmds---
+        nvt_write_addr(chip_info->s_client, chip_info->trim_id_table.mmap->BOOT_RDY_ADDR, 0);
+
+        //---write POR_CD cmds---
+        nvt_write_addr(chip_info->s_client, chip_info->trim_id_table.mmap->POR_CD_ADDR, 0xA0);
+    }
 
     //---set xdata index to EVENT BUF ADDR---
     nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
@@ -953,6 +1007,62 @@ static void nvt_eng_reset(struct chip_data_nt36525b *chip_info)
     nvt_write_addr(chip_info->s_client, chip_info->ENG_RST_ADDR, 0x5A);
 
     mdelay(1);      //wait tMCU_Idle2TP_REX_Hi after TP_RST
+}
+
+/*******************************************************
+Description:
+        Novatek touchscreen check checksum function.
+This function will compare file checksum and fw checksum.
+
+return:
+        n.a.
+*******************************************************/
+static int32_t Check_CheckSum(struct chip_data_nt36525b *chip_info)
+{
+    uint32_t fw_checksum = 0;
+    uint32_t len = chip_info->partition * 4;
+    uint32_t list = 0;
+    int32_t ret = 0;
+
+    memset(chip_info->fwbuf, 0, (len + 1));
+
+    //---set xdata index to checksum---
+    nvt_set_page(chip_info, chip_info->trim_id_table.mmap->R_ILM_CHECKSUM_ADDR);
+
+    /* read checksum */
+    chip_info->fwbuf[0] = (chip_info->trim_id_table.mmap->R_ILM_CHECKSUM_ADDR) & 0x7F;
+    ret = CTP_SPI_READ(chip_info->s_client, chip_info->fwbuf, len + 1);
+    if (ret) {
+        TPD_INFO("Read fw checksum failed\n");
+        return ret;
+    }
+
+    /*
+     * Compare each checksum from fw
+     * ILM + DLM + Overlay + Info
+     * ilm_dlm_num (ILM & DLM) + ovly_sec_num + info_sec_num
+     */
+    for (list = 0; list < chip_info->partition; list++) {
+        fw_checksum = byte_to_word(&chip_info->fwbuf[1 + list * 4]);
+
+        /* ignore reserved partition (Reserved Partition size is zero) */
+        if(!chip_info->bin_map[list].size)
+            continue;
+
+        if (chip_info->bin_map[list].crc != fw_checksum) {
+            TPD_INFO("[%d] BIN_checksum=0x%08X, FW_checksum=0x%08X\n",
+                     list, chip_info->bin_map[list].crc, fw_checksum);
+
+            TPD_INFO("firmware checksum not match!!\n");
+            ret = -EIO;
+            break;
+        }
+    }
+
+    //---set xdata index to EVENT BUF ADDR---
+    nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
+
+    return ret;
 }
 
 /*******************************************************
@@ -1054,7 +1164,11 @@ static int32_t Download_Firmware_HW_CRC(struct chip_data_nt36525b *chip_info, co
         nvt_bld_crc_enable(chip_info);
 
         /* clear fw reset status & enable fw crc check */
-        nvt_fw_crc_enable(chip_info);
+        ret = nvt_fw_crc_enable(chip_info);
+        if (ret) {
+            TPD_INFO("nvt_fw_crc_enable failed. (%d)\n", ret);
+            goto fail;
+        }
 
         /* Set Boot Ready Bit */
         nvt_boot_ready(chip_info, true);
@@ -1062,6 +1176,73 @@ static int32_t Download_Firmware_HW_CRC(struct chip_data_nt36525b *chip_info, co
         ret = nvt_check_fw_reset_state_noflash(chip_info, RESET_STATE_INIT);
         if (ret) {
             TPD_INFO("nvt_check_fw_reset_state_noflash failed. (%d)\n", ret);
+            goto fail;
+        } else {
+            break;
+        }
+
+fail:
+        retry++;
+        if(unlikely(retry > 2) || chip_info->using_headfile) {
+            TPD_INFO("error, retry=%d\n", retry);
+            break;
+        }
+    }
+
+    do_gettimeofday(&end);
+
+    return ret;
+}
+
+/*******************************************************
+Description:
+        Novatek touchscreen Download_Firmware function. It's
+complete download firmware flow.
+
+return:
+        n.a.
+*******************************************************/
+static int32_t Download_Firmware(struct chip_data_nt36525b *chip_info, const struct firmware *fw)
+{
+    uint8_t retry = 0;
+    int32_t ret = 0;
+
+    do_gettimeofday(&start);
+
+    while (1) {
+        /*
+         * Send eng reset cmd before download FW
+         * Keep TP_RESX low when send eng reset cmd
+         */
+        gpio_set_value(chip_info->hw_res->reset_gpio, 0);
+        mdelay(1);      //wait 1ms
+        nvt_eng_reset(chip_info);
+        gpio_set_value(chip_info->hw_res->reset_gpio, 1);
+        udelay(5);      //wait tRSTA2BRST after TP_RST
+        nvt_bootloader_reset_noflash(chip_info);
+
+        /* clear fw reset status */
+        nvt_write_addr(chip_info->s_client, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR | EVENT_MAP_RESET_COMPLETE, 0x00);
+
+        /* Start Write Firmware Process */
+        ret = Write_Partition(chip_info, fw->data, fw->size);
+        if (ret) {
+            TPD_INFO("Write_Firmware failed. (%d)\n", ret);
+            goto fail;
+        }
+
+        /* Set Boot Ready Bit */
+        nvt_boot_ready(chip_info, true);
+
+        ret = nvt_check_fw_reset_state_noflash(chip_info, RESET_STATE_INIT);
+        if (ret) {
+            TPD_INFO("nvt_check_fw_reset_state_noflash failed. (%d)\n", ret);
+            goto fail;
+        }
+
+        ret = Check_CheckSum(chip_info);        //Check FW checksum
+        if (ret) {
+            TPD_INFO("check checksum failed, retry=%d\n", retry);
             goto fail;
         } else {
             break;
@@ -1452,7 +1633,7 @@ static int nvt_get_touch_points(void *chip_data, struct point_info *points, int 
 static int8_t nvt_extend_cmd_store(struct chip_data_nt36525b *chip_info, uint8_t u8Cmd, uint8_t u8SubCmd)
 {
     int i, retry = 5;
-    uint8_t buf[4] = {0};
+    uint8_t buf[3] = {0};
 
     //---set xdata index to EVENT BUF ADDR---(set page)
     nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
@@ -1550,7 +1731,7 @@ static void nvt_read_debug_gesture_coordinate_buffer(struct chip_data_nt36525b *
     int32_t i = 0;
     int32_t j = 0;
     int32_t k = 0;
-    uint8_t buf[SPI_TANSFER_LENGTH + 2] = {0};
+    uint8_t buf[SPI_TANSFER_LENGTH + 1] = {0};
     uint32_t head_addr = 0;
     int32_t dummy_len = 0;
     //int32_t data_len = 128;	/* max buffer size 1024 */
@@ -1943,6 +2124,7 @@ static __maybe_unused int nvt_enable_debug_gesture_coordinate_mode(struct chip_d
 
 #endif // end of CONFIG_OPPO_TP_APK
 
+
 static int nvt_enable_black_gesture(struct chip_data_nt36525b *chip_info, bool enable)
 {
     int ret = -1;
@@ -1950,27 +2132,16 @@ static int nvt_enable_black_gesture(struct chip_data_nt36525b *chip_info, bool e
     TPD_INFO("%s, enable = %d, chip_info->is_sleep_writed = %d\n", __func__, enable, chip_info->is_sleep_writed);
 
     if (chip_info->is_sleep_writed) {
-        //disable_irq_nosync(chip_info->irq_num);
-        chip_info->need_judge_irq_throw = true;
         nvt_lcd_reset_gpio_control(chip_info, true);
         mdelay(5);
-        if (get_lcd_status() != 1) {
-            TPD_INFO("LCD not init, control the reset low!");
-            nvt_lcd_reset_gpio_control(chip_info, false);
-            mdelay(5);
-            nvt_lcd_reset_gpio_control(chip_info, true);
-            mdelay(10);
-            nvt_reset(chip_info);
-        }
-        chip_info->need_judge_irq_throw = false;
+        nvt_lcd_reset_gpio_control(chip_info, false);
+        mdelay(5);
+        nvt_lcd_reset_gpio_control(chip_info, true);
+        mdelay(10);
+        nvt_reset(chip_info);
     }
 
-
     if (enable) {
-        if (get_lcd_status() > 0) {
-            TPD_INFO("Will power on soon!");
-            return ret;
-        }
 #ifdef CONFIG_OPPO_TP_APK
         if (chip_info->debug_gesture_sta) {
             nvt_enable_debug_gesture_coordinate_record_mode(chip_info, true);
@@ -2024,16 +2195,16 @@ static int nvt_enable_charge_mode(struct chip_data_nt36525b *chip_info, bool ena
     return ret;
 }
 
-static int nvt_enable_game_mode(struct chip_data_nt36525b *chip_info, bool enable)
+static int nvt_enable_jitter_mode(struct chip_data_nt36525b *chip_info, bool enable)
 {
     int8_t ret = -1;
 
     TPD_INFO("%s:enable = %d, chip_info->is_sleep_writed = %d\n", __func__, enable, chip_info->is_sleep_writed);
 
     if (enable) {
-        ret = nvt_cmd_store(chip_info, EVENTBUFFER_GAME_ON);
+        ret = nvt_cmd_store(chip_info, EVENTBUFFER_JITTER_ON);
     } else {
-        ret = nvt_cmd_store(chip_info, EVENTBUFFER_GAME_OFF);
+        ret = nvt_cmd_store(chip_info, EVENTBUFFER_JITTER_OFF);
     }
 
     return ret;
@@ -2108,26 +2279,6 @@ static __maybe_unused int nvt_enable_debug_msg_diff_mode(struct chip_data_nt3652
 
     return ret;
 }
-
-static __maybe_unused int nvt_enable_water_polling_mode(struct chip_data_nt36525b *chip_info, bool enable)
-{
-    int8_t ret = -1;
-
-    TPD_INFO("%s:enable = %d, chip_info->is_sleep_writed = %d\n", __func__,
-             enable, chip_info->is_sleep_writed);
-
-
-    nvt_esd_check_update_timer(chip_info);
-
-
-    if (enable) {
-        ret = nvt_extend_cmd_store(chip_info, EVENTBUFFER_EXT_CMD, EVENTBUFFER_EXT_DBG_WATER_POLLING_ON);
-    } else {
-        ret = nvt_extend_cmd_store(chip_info, EVENTBUFFER_EXT_CMD, EVENTBUFFER_EXT_DBG_WATER_POLLING_OFF);
-    }
-
-    return ret;
-}
 #endif // end of CONFIG_OPPO_TP_APK
 
 static int nvt_mode_switch(void *chip_data, work_mode mode, bool flag)
@@ -2178,7 +2329,7 @@ static int nvt_mode_switch(void *chip_data, work_mode mode, bool flag)
         break;
 
     case MODE_GAME:
-        ret = nvt_enable_game_mode(chip_info, flag);
+        ret = nvt_enable_jitter_mode(chip_info, !flag);
         if (ret < 0) {
             TPD_INFO("%s: enable charge mode : %d failed\n", __func__, flag);
         }
@@ -2249,8 +2400,7 @@ static fw_check_state nvt_fw_check(void *chip_data, struct resolution_info *reso
         return FW_ABNORMAL;
     } else {
         panel_data->TP_FW = chip_info->fw_ver;
-        snprintf(dev_version, MAX_DEVICE_VERSION_LENGTH,
-                 "%02X", panel_data->TP_FW);
+        sprintf(dev_version, "%02X", panel_data->TP_FW);
         if (panel_data->manufacture_info.version) {
 
             if (panel_data->vid_len == 0) {
@@ -2409,7 +2559,7 @@ static void nvt_read_mdata(struct chip_data_nt36525b *chip_info, uint32_t xdata_
     int32_t i = 0;
     int32_t j = 0;
     int32_t k = 0;
-    uint8_t buf[SPI_TANSFER_LENGTH + 2] = {0};
+    uint8_t buf[SPI_TANSFER_LENGTH + 1] = {0};
     uint32_t head_addr = 0;
     int32_t dummy_len = 0;
     int32_t data_len = 0;
@@ -2492,7 +2642,7 @@ static void nvt_read_debug_mdata(struct chip_data_nt36525b *chip_info,
     int32_t i = 0;
     int32_t j = 0;
     int32_t k = 0;
-    uint8_t buf[SPI_TANSFER_LENGTH + 2] = {0};
+    uint8_t buf[SPI_TANSFER_LENGTH + 1] = {0};
     uint32_t head_addr = 0;
     int32_t dummy_len = 0;
     int32_t data_len = 0;
@@ -2712,6 +2862,144 @@ static void store_to_file(int fd, char *format, ...)
     }
 }
 
+#if 0   //Roland
+/*******************************************************
+Description:
+        Novatek touchscreen release update firmware function.
+
+return:
+        n.a.
+*******************************************************/
+static void update_firmware_release(const struct firmware *fw)
+{
+    if (fw) {
+        release_firmware(fw);
+    }
+
+    fw = NULL;
+}
+#endif
+
+fw_update_state nvt_fw_update_headfile(void *chip_data)
+{
+    int ret = 0;
+    struct chip_data_nt36525b *chip_info = (struct chip_data_nt36525b *)chip_data;
+    struct touchpanel_data *ts = spi_get_drvdata(chip_info->s_client);
+    struct firmware *request_fw_headfile = NULL;
+    const struct firmware *fw = NULL;
+
+    //check bin file size(116kb)
+    /*if(fw != NULL ) {
+            release_firmware(fw);
+             fw = NULL;
+          }*/
+
+    //request firmware failed, get from headfile
+    if(fw == NULL) {
+        TPD_INFO("request firmware failed, get from headfile\n");
+        request_fw_headfile = kzalloc(sizeof(struct firmware), GFP_KERNEL);
+        if(request_fw_headfile == NULL) {
+            TPD_INFO("%s kzalloc failed!\n", __func__);
+            return FW_NO_NEED_UPDATE;
+        }
+        if(chip_info->p_firmware_headfile->firmware_data) {
+            request_fw_headfile->size = chip_info->p_firmware_headfile->firmware_size;
+            request_fw_headfile->data = chip_info->p_firmware_headfile->firmware_data;
+            fw = request_fw_headfile;
+        } else {
+            TPD_INFO("firmware_data is NULL! exit firmware update!\n");
+            kfree(request_fw_headfile);
+            request_fw_headfile = NULL;
+            return FW_NO_NEED_UPDATE;
+        }
+    }
+
+    //check bin file size(116kb)
+    if(fw->size != FW_BIN_SIZE) {
+        TPD_INFO("fw file size not match. (%zu)\n", fw->size);
+        if (request_fw_headfile != NULL) {
+            kfree(request_fw_headfile);
+            request_fw_headfile = NULL;
+        }
+        return FW_NO_NEED_UPDATE;
+    }
+
+    // check if FW version add FW version bar equals 0xFF
+    if (*(fw->data + FW_BIN_VER_OFFSET) + * (fw->data + FW_BIN_VER_BAR_OFFSET) != 0xFF) {
+        TPD_INFO("bin file FW_VER + FW_VER_BAR should be 0xFF!\n");
+        TPD_INFO("FW_VER=0x%02X, FW_VER_BAR=0x%02X\n", *(fw->data + FW_BIN_VER_OFFSET), *(fw->data + FW_BIN_VER_BAR_OFFSET));
+        if (request_fw_headfile != NULL) {
+            kfree(request_fw_headfile);
+            request_fw_headfile = NULL;
+        }
+        return FW_NO_NEED_UPDATE;
+    }
+
+    /* BIN Header Parser */
+    ret = nvt_bin_header_parser(chip_info, fw->data, fw->size);
+    if (ret) {
+        TPD_INFO("bin header parser failed\n");
+        goto download_fail;
+    }
+
+    /* initial buffer and variable */
+    ret = Download_Init(chip_info);
+    if (ret) {
+        TPD_INFO("Download Init failed. (%d)\n", ret);
+        goto init_fail;
+    }
+
+    /* download firmware process */
+    if (chip_info->trim_id_table.support_hw_crc)
+        ret = Download_Firmware_HW_CRC(chip_info, fw);
+    else
+        ret = Download_Firmware(chip_info, fw);
+    if (ret) {
+        TPD_INFO("Download Firmware failed. (%d)\n", ret);
+        goto download_fail;
+    }
+
+    TPD_INFO("Update firmware success! <%ld us>\n",
+             (end.tv_sec - start.tv_sec) * 1000000L + (end.tv_usec - start.tv_usec));
+
+    /* Get FW Info */
+    ret = nvt_get_fw_info_noflash(chip_info);
+    if (ret) {
+        TPD_INFO("nvt_get_fw_info_noflash failed. (%d)\n", ret);
+        goto download_fail;
+    }
+
+    nvt_fw_check(ts->chip_data, &ts->resolution_info, &ts->panel_data);
+
+    chip_info->using_headfile = true;
+
+    if(chip_info->bin_map != NULL) {
+        kfree(chip_info->bin_map);
+        chip_info->bin_map = NULL;
+    }
+
+    if(request_fw_headfile != NULL) {
+        kfree(request_fw_headfile);
+        request_fw_headfile = NULL;
+        //fw = NULL;
+    }
+    return FW_UPDATE_SUCCESS;
+
+download_fail:
+    if(chip_info->bin_map != NULL) {
+        kfree(chip_info->bin_map);
+        chip_info->bin_map = NULL;
+    }
+init_fail:
+    if(request_fw_headfile != NULL) {
+        kfree(request_fw_headfile);
+        request_fw_headfile = NULL;
+        fw = NULL;
+    }
+    return FW_NO_NEED_UPDATE;
+
+}
+
 /*******************************************************
 Description:
     Novatek touchscreen nvt_check_bin_checksum function.
@@ -2748,7 +3036,7 @@ static fw_update_state nvt_fw_update_sub(void *chip_data, const struct firmware 
     //check bin file size(116kb)
     if(fw != NULL && fw->size != FW_BIN_SIZE) {
         TPD_INFO("bin file size not match (%zu), change to use headfile fw.\n", fw->size);
-        goto out_fail;
+        goto download_fail;
         //release_firmware(fw);
         //fw = NULL;
     }
@@ -2758,7 +3046,7 @@ static fw_update_state nvt_fw_update_sub(void *chip_data, const struct firmware 
         request_fw_headfile = kzalloc(sizeof(struct firmware), GFP_KERNEL);
         if(request_fw_headfile == NULL) {
             TPD_INFO("%s kzalloc failed!\n", __func__);
-            goto out_fail;
+            return FW_NO_NEED_UPDATE;
         }
 
         if (chip_info->g_fw_sta) {
@@ -2777,7 +3065,11 @@ static fw_update_state nvt_fw_update_sub(void *chip_data, const struct firmware 
 
             } else {
                 TPD_INFO("firmware_data is NULL! exit firmware update!\n");
-                goto out_fail;
+                if(request_fw_headfile != NULL) {
+                    kfree(request_fw_headfile);
+                    request_fw_headfile = NULL;
+                }
+                return FW_NO_NEED_UPDATE;
             }
         }
     }
@@ -2785,14 +3077,14 @@ static fw_update_state nvt_fw_update_sub(void *chip_data, const struct firmware 
     //check bin file size(116kb)
     if(fw->size != FW_BIN_SIZE) {
         TPD_INFO("fw file size not match. (%zu)\n", fw->size);
-        goto out_fail;
+        return FW_NO_NEED_UPDATE;
     }
 
     // check if FW version add FW version bar equals 0xFF
     if (*(fw->data + FW_BIN_VER_OFFSET) + * (fw->data + FW_BIN_VER_BAR_OFFSET) != 0xFF) {
         TPD_INFO("bin file FW_VER + FW_VER_BAR should be 0xFF!\n");
         TPD_INFO("FW_VER=0x%02X, FW_VER_BAR=0x%02X\n", *(fw->data + FW_BIN_VER_OFFSET), *(fw->data + FW_BIN_VER_BAR_OFFSET));
-        goto out_fail;
+        return FW_NO_NEED_UPDATE;
     }
 
     //fw checksum compare
@@ -2801,7 +3093,7 @@ static fw_update_state nvt_fw_update_sub(void *chip_data, const struct firmware 
         if (fw != request_fw_headfile) {
             TPD_INFO("Image fw check checksum failed, reload fw from array\n");
 
-            goto out_fail;
+            goto init_fail;
 
         } else {
             TPD_INFO("array fw check checksum failed, but use still\n");
@@ -2816,23 +3108,24 @@ static fw_update_state nvt_fw_update_sub(void *chip_data, const struct firmware 
     ret = nvt_bin_header_parser(chip_info, fw->data, fw->size);
     if (ret) {
         TPD_INFO("bin header parser failed\n");
-        goto out_fail;
+        goto download_fail;
     }
 
     /* initial buffer and variable */
     ret = Download_Init(chip_info);
     if (ret) {
         TPD_INFO("Download Init failed. (%d)\n", ret);
-        goto out_fail;
+        goto init_fail;
     }
 
     /* download firmware process */
-    if (chip_info->trim_id_table.support_hw_crc) {
+    if (chip_info->trim_id_table.support_hw_crc)
         ret = Download_Firmware_HW_CRC(chip_info, fw);
-    }
+    else
+        ret = Download_Firmware(chip_info, fw);
     if (ret) {
         TPD_INFO("Download Firmware failed. (%d)\n", ret);
-        goto out_fail;
+        goto download_fail;
     }
 
     TPD_INFO("Update firmware success! <%ld us>\n",
@@ -2846,7 +3139,7 @@ static fw_update_state nvt_fw_update_sub(void *chip_data, const struct firmware 
     ret = nvt_get_fw_info_noflash(chip_info);
     if (ret) {
         TPD_INFO("nvt_get_fw_info_noflash failed. (%d)\n", ret);
-        goto out_fail;
+        goto download_fail;
     }
     ret = CTP_SPI_READ(chip_info->s_client, point_data, POINT_DATA_LEN + 1);
     if (ret < 0 || nvt_fw_recovery(point_data)) {
@@ -2866,11 +3159,14 @@ static fw_update_state nvt_fw_update_sub(void *chip_data, const struct firmware 
     }
     return FW_UPDATE_SUCCESS;
 
-out_fail:
+download_fail:
     if(chip_info->bin_map != NULL) {
         kfree(chip_info->bin_map);
         chip_info->bin_map = NULL;
     }
+    ret = nvt_fw_update_headfile(chip_info);
+    return ret;
+init_fail:
     if(request_fw_headfile != NULL) {
         kfree(request_fw_headfile);
         request_fw_headfile = NULL;
@@ -2956,151 +3252,20 @@ exit:
     return;
 }
 
-static void nvt_enable_doze_noise_collect(struct chip_data_nt36525b *chip_info, int32_t frame_num)
-{
-    int ret = -1;
-    uint8_t buf[8] = {0};
-
-    //---set xdata index to EVENT BUF ADDR---
-    ret = nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
-
-    //---enable noise collect---
-    buf[0] = EVENT_MAP_HOST_CMD;
-    buf[1] = 0x4B;
-    buf[2] = 0xAA;
-    buf[3] = frame_num;
-    buf[4] = 0x00;
-    ret |= CTP_SPI_WRITE(chip_info->s_client, buf, 5);
-    if (ret < 0) {
-        TPD_INFO("%s failed\n", __func__);
-    }
-}
-
-static int32_t nvt_read_doze_fw_noise(struct chip_data_nt36525b *chip_info, int32_t config_Doze_Noise_Test_Frame, int32_t doze_X_Channel, int32_t *xdata, int32_t *xdata_n, int32_t xdata_len)
-{
-    uint8_t buf[128] = {0};
-    uint32_t x = 0;
-    uint32_t y = 0;
-    uint32_t rx_num = chip_info->hw_res->RX_NUM;
-    int32_t iArrayIndex = 0;
-    int32_t frame_num = 0;
-
-    if (xdata_len / sizeof(int32_t) < rx_num * doze_X_Channel) {
-        TPD_INFO("read doze nosie buffer(%d) less than data size(%d)\n", xdata_len, rx_num * doze_X_Channel);
-        return -1;
-    }
-
-    //---Enter Test Mode---
-    if (nvt_clear_fw_status(chip_info)) {
-        return -EAGAIN;
-    }
-
-    frame_num = config_Doze_Noise_Test_Frame / 10;
-    if (frame_num <= 0)
-        frame_num = 1;
-    TPD_INFO("%s: frame_num=%d\n", __func__, frame_num);
-    nvt_enable_doze_noise_collect(chip_info, frame_num);
-    // need wait PS_Config_Doze_Noise_Test_Frame * 8.3ms
-    msleep(frame_num * 83);
-
-    if (nvt_polling_hand_shake_status(chip_info)) {
-        return -EAGAIN;
-    }
-
-    for (x = 0; x < doze_X_Channel; x++) {
-        //---change xdata index---
-        nvt_set_page(chip_info, chip_info->trim_id_table.mmap->DIFF_PIPE0_ADDR + rx_num * doze_X_Channel * x);
-
-        //---read data---
-        buf[0] = (chip_info->trim_id_table.mmap->DIFF_PIPE0_ADDR + rx_num * doze_X_Channel * x) & 0xFF;
-        CTP_SPI_READ(chip_info->s_client, buf, rx_num * 2 + 1);
-
-        for (y = 0; y < rx_num; y++) {
-            xdata[y * doze_X_Channel + x] = (uint16_t)(buf[y * doze_X_Channel + 1] + 256 * buf[y * doze_X_Channel + 2]);
-        }
-    }
-
-    for (y = 0; y < rx_num; y++) {
-        for (x = 0; x < doze_X_Channel; x++) {
-            iArrayIndex = y * doze_X_Channel + x;
-            xdata_n[iArrayIndex] = (int8_t)(xdata[iArrayIndex] & 0xFF) * 4;
-            xdata[iArrayIndex] = (int8_t)((xdata[iArrayIndex] >> 8) & 0xFF) * 4;    //scaling up
-        }
-    }
-
-    //---Leave Test Mode---
-    //nvt_change_mode(NORMAL_MODE);    //No return to normal mode. Continuous to get doze rawdata
-
-    return 0;
-}
-
-static int32_t nvt_read_doze_baseline(struct chip_data_nt36525b *chip_info, int32_t doze_X_Channel, int32_t *xdata, int32_t xdata_len)
-{
-    uint8_t buf[256] = {0};
-    uint32_t x = 0;
-    uint32_t y = 0;
-    uint32_t rm_num = chip_info->hw_res->RX_NUM;
-    int32_t iArrayIndex = 0;
-
-    //---Enter Test Mode---
-    //nvt_change_mode(TEST_MODE_2);
-
-    //if (nvt_check_fw_status()) {
-    //    return -EAGAIN;
-    //}
-    if (xdata_len / sizeof(int32_t) < rm_num * doze_X_Channel) {
-        TPD_INFO("read doze baseline buffer(%d) less than data size(%d)\n", xdata_len, rm_num * doze_X_Channel);
-        return -1;
-    }
-
-    for (x = 0; x < doze_X_Channel; x++) {
-        //---change xdata index---
-        nvt_set_page(chip_info, chip_info->trim_id_table.mmap->DOZE_GM_S1D_SCAN_RAW_ADDR + rm_num * doze_X_Channel * x);
-
-        //---read data---
-        buf[0] = (chip_info->trim_id_table.mmap->DOZE_GM_S1D_SCAN_RAW_ADDR + rm_num * doze_X_Channel * x) & 0xFF;
-        CTP_SPI_READ(chip_info->s_client, buf, rm_num * 2 + 1);
-        for (y = 0; y < rm_num; y++) {
-            xdata[y * 2 + x] = (uint16_t)(buf[y * 2 + 1] + 256 * buf[y * 2 + 2]);
-        }
-    }
-
-    for (y = 0; y < rm_num; y++) {
-        for (x = 0; x < doze_X_Channel; x++) {
-            iArrayIndex = y * doze_X_Channel + x;
-            xdata[iArrayIndex] = (int16_t)xdata[iArrayIndex];
-        }
-    }
-
-    //---Leave Test Mode---
-    nvt_change_mode(chip_info, NORMAL_MODE);
-    return 0;
-}
-
-
 static void nvt_black_screen_test(void *chip_data, char *message)
 {
     /* test data */
     int32_t *raw_data = NULL;
     int32_t *noise_p_data = NULL;
     int32_t *noise_n_data = NULL;
-    int32_t *fdm_noise_p_data = NULL;
-    int32_t *fdm_noise_n_data = NULL;
-    int32_t *fdm_raw_data = NULL;
     /* test result */
     uint8_t rawdata_result = NVT_MP_UNKNOW;
     uint8_t noise_p_result = NVT_MP_UNKNOW;
     uint8_t noise_n_result = NVT_MP_UNKNOW;
-    uint8_t fdm_noise_p_result = NVT_MP_UNKNOW;
-    uint8_t fdm_noise_n_result = NVT_MP_UNKNOW;
-    uint8_t fdm_rawdata_result = NVT_MP_UNKNOW;
     /* record data */
     uint8_t *raw_record = NULL;
     uint8_t *noise_p_record = NULL;
     uint8_t *noise_n_record = NULL;
-    uint8_t *fdm_noise_p_record = NULL;
-    uint8_t *fdm_noise_n_record = NULL;
-    uint8_t *fdm_raw_record = NULL;
     struct chip_data_nt36525b *chip_info = (struct chip_data_nt36525b *)chip_data;
     int tx_num = chip_info->hw_res->TX_NUM;
     int rx_num = chip_info->hw_res->RX_NUM;
@@ -3120,8 +3285,6 @@ static void nvt_black_screen_test(void *chip_data, char *message)
     uint8_t copy_len = 0;
     int32_t *lpwg_rawdata_P = NULL, *lpwg_rawdata_N = NULL;
     int32_t *lpwg_diff_rawdata_P = NULL, *lpwg_diff_rawdata_N = NULL;
-    int32_t *fdm_rawdata_P = NULL, *fdm_rawdata_N = NULL;
-    int32_t *fdm_diff_rawdata_P = NULL, *fdm_diff_rawdata_N = NULL;
 
     nvt_esd_check_enable(chip_info, false);
 
@@ -3147,7 +3310,7 @@ static void nvt_black_screen_test(void *chip_data, char *message)
         return;
 
     }
-    chip_info->need_judge_irq_throw = true;
+    disable_irq_nosync(chip_info->irq_num);
 
     nvt_lcd_reset_gpio_control(chip_info, true);
     mdelay(5);
@@ -3171,26 +3334,17 @@ static void nvt_black_screen_test(void *chip_data, char *message)
     nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
     ret = nvt_cmd_store(chip_info, CMD_OPEN_BLACK_GESTURE);
     TPD_INFO("%s: enable gesture %s !\n", __func__, (ret < 0) ? "failed" : "success");
-    msleep(500);	/* for FDM (500ms) */
-
-    if (nvt_check_fw_reset_state_noflash(chip_info, RESET_STATE_NORMAL_RUN)) {
-        TPD_INFO("check fw reset state failed!\n");
-        snprintf(message, MESSAGE_SIZE,
-                 "1 error, check fw reset state failed!\n");
-        goto RELEASE_FIRMWARE;
-    }
+    msleep(100);
 
     if (nvt_switch_FreqHopEnDis(chip_info, FREQ_HOP_DISABLE)) {
         TPD_INFO("switch frequency hopping disable failed!\n");
-        snprintf(message, MESSAGE_SIZE,
-                 "1 error, switch frequency hopping disable failed!\n");
+        sprintf(message, "1 error, switch frequency hopping disable failed!\n");
         goto RELEASE_FIRMWARE;
     }
 
     if (nvt_check_fw_reset_state_noflash(chip_info, RESET_STATE_NORMAL_RUN)) {
         TPD_INFO("check fw reset state failed!\n");
-        snprintf(message, MESSAGE_SIZE,
-                 "1 error, check fw reset state failed!\n");
+        sprintf(message, "1 error, check fw reset state failed!\n");
         goto RELEASE_FIRMWARE;
     }
 
@@ -3199,8 +3353,7 @@ static void nvt_black_screen_test(void *chip_data, char *message)
     //---Enter Test Mode---
     if (nvt_clear_fw_status(chip_info)) {
         TPD_INFO("clear fw status failed!\n");
-        snprintf(message, MESSAGE_SIZE,
-                 "1 error, clear fw status failed!\n");
+        sprintf(message, "1 error, clear fw status failed!\n");
         goto RELEASE_FIRMWARE;
     }
 
@@ -3208,15 +3361,13 @@ static void nvt_black_screen_test(void *chip_data, char *message)
 
     if (nvt_check_fw_status(chip_info)) {
         TPD_INFO("check fw status failed!\n");
-        snprintf(message, MESSAGE_SIZE,
-                 "1 error, clear fw status failed!\n");
+        sprintf(message, "1 error, clear fw status failed!\n");
         goto RELEASE_FIRMWARE;
     }
 
     if (nvt_get_fw_info_noflash(chip_info)) {
         TPD_INFO("get fw info failed!\n");
-        snprintf(message, MESSAGE_SIZE,
-                 "1 error, get fw info failed!\n");
+        sprintf(message, "1 error, get fw info failed!\n");
         goto RELEASE_FIRMWARE;
     }
 
@@ -3225,14 +3376,16 @@ static void nvt_black_screen_test(void *chip_data, char *message)
     raw_data = kzalloc(buf_len, GFP_KERNEL);
     noise_p_data = kzalloc(buf_len, GFP_KERNEL);
     noise_n_data = kzalloc(buf_len, GFP_KERNEL);
-    fdm_noise_p_data = kzalloc(buf_len, GFP_KERNEL);
-    fdm_noise_n_data = kzalloc(buf_len, GFP_KERNEL);
-    fdm_raw_data = kzalloc(buf_len, GFP_KERNEL);
-    if (!(raw_data && noise_p_data && noise_n_data
-          && fdm_raw_data && fdm_noise_p_data && fdm_noise_n_data)) {
+    if (!(raw_data && noise_p_data && noise_n_data)) {
         TPD_INFO("kzalloc space failed\n");
-        snprintf(message, MESSAGE_SIZE, "1 error, kzalloc space failed\n");
-        goto RELEASE_DATA;
+        sprintf(message, "1 error, kzalloc space failed\n");
+        if (raw_data)
+            kfree(raw_data);
+        if (noise_p_data)
+            kfree(noise_p_data);
+        if (noise_n_data)
+            kfree(noise_n_data);
+        goto RELEASE_FIRMWARE;
     }
 
     TPD_INFO("malloc raw_record space\n");
@@ -3240,13 +3393,15 @@ static void nvt_black_screen_test(void *chip_data, char *message)
     raw_record = kzalloc(record_len, GFP_KERNEL);
     noise_p_record = kzalloc(record_len, GFP_KERNEL);
     noise_n_record = kzalloc(record_len, GFP_KERNEL);
-    fdm_noise_p_record = kzalloc(record_len, GFP_KERNEL);
-    fdm_noise_n_record = kzalloc(record_len, GFP_KERNEL);
-    fdm_raw_record = kzalloc(record_len, GFP_KERNEL);
-    if (!(raw_record && noise_p_record && noise_n_record
-          && fdm_raw_record && fdm_noise_p_record && fdm_noise_n_record)) {
+    if (!(raw_record && noise_p_record && noise_n_record)) {
         TPD_INFO("kzalloc space failed\n");
-        snprintf(message, MESSAGE_SIZE, "1 error, kzalloc space failed\n");
+        sprintf(message, "1 error, kzalloc space failed\n");
+        if (raw_record)
+            kfree(raw_record);
+        if (noise_p_record)
+            kfree(noise_p_record);
+        if (noise_n_record)
+            kfree(noise_n_record);
         goto RELEASE_DATA;
     }
 
@@ -3254,11 +3409,8 @@ static void nvt_black_screen_test(void *chip_data, char *message)
     TPD_INFO("Roland--->fw path is %s\n", chip_info->test_limit_name);
     if (ret < 0) {
         TPD_INFO("Request firmware failed - %s (%d)\n", chip_info->test_limit_name, ret);
-        snprintf(message, MESSAGE_SIZE,
-                 "1 error, Request firmware failed: %s\n",
-                 chip_info->test_limit_name);
-
-        goto RELEASE_DATA;
+        sprintf(message, "1 error, Request firmware failed: %s\n", chip_info->test_limit_name);
+        goto RELEASE_RRECORD_DATA;
     }
     ph = (struct nvt_test_header *)(fw->data);
 
@@ -3266,10 +3418,6 @@ static void nvt_black_screen_test(void *chip_data, char *message)
     lpwg_rawdata_N = (int32_t *)(fw->data + ph->array_LPWG_Rawdata_N_offset);
     lpwg_diff_rawdata_P = (int32_t *)(fw->data + ph->array_LPWG_Diff_P_offset);
     lpwg_diff_rawdata_N = (int32_t *)(fw->data + ph->array_LPWG_Diff_N_offset);
-    fdm_rawdata_P = (int32_t *)(fw->data + ph->array_FDM_Rawdata_P_offset);
-    fdm_rawdata_N = (int32_t *)(fw->data + ph->array_FDM_Rawdata_N_offset);
-    fdm_diff_rawdata_P = (int32_t *)(fw->data + ph->array_FDM_Diff_P_offset);
-    fdm_diff_rawdata_N = (int32_t *)(fw->data + ph->array_FDM_Diff_N_offset);
     //---FW Rawdata Test---
     TPD_INFO("LPWG mode FW Rawdata Test \n");
     memset(raw_data, 0, buf_len);
@@ -3291,11 +3439,8 @@ static void nvt_black_screen_test(void *chip_data, char *message)
                     TPD_INFO("LPWG_Rawdata Test failed at rawdata[%d][%d] = %d[%d %d]\n",
                              i, j, raw_data[iArrayIndex], ph->config_Lmt_LPWG_Rawdata_N, ph->config_Lmt_LPWG_Rawdata_P);
                     if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "LPWG Rawdata[%d][%d] = %d[%d %d]\n",
-                                 i, j, raw_data[iArrayIndex],
-                                 ph->config_Lmt_LPWG_Rawdata_N,
-                                 ph->config_Lmt_LPWG_Rawdata_P);
+                        sprintf(buf, "LPWG Rawdata[%d][%d] = %d[%d %d]\n",
+                                i, j, raw_data[iArrayIndex], ph->config_Lmt_LPWG_Rawdata_N, ph->config_Lmt_LPWG_Rawdata_P);
                     }
                     err_cnt++;
                 }
@@ -3313,11 +3458,8 @@ static void nvt_black_screen_test(void *chip_data, char *message)
                     raw_record[iArrayIndex] = 1;
                     TPD_INFO("LPWG_Rawdata Test failed at rawdata[%d][%d] = %d\n", i, j, raw_data[iArrayIndex]);
                     if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "LPWG Rawdata[%d][%d] = %d[%d %d]\n",
-                                 i, j, raw_data[iArrayIndex],
-                                 lpwg_rawdata_N[iArrayIndex],
-                                 lpwg_rawdata_P[iArrayIndex]);
+                        sprintf(buf, "LPWG Rawdata[%d][%d] = %d[%d %d]\n",
+                                i, j, raw_data[iArrayIndex], lpwg_rawdata_N[iArrayIndex], lpwg_rawdata_P[iArrayIndex]);
                     }
                     err_cnt++;
                 }
@@ -3341,7 +3483,7 @@ static void nvt_black_screen_test(void *chip_data, char *message)
         TPD_INFO("LPWG mode read Noise data failed!\n");    // 1: ERROR
         noise_p_result = NVT_MP_FAIL_READ_DATA;
         noise_n_result = NVT_MP_FAIL_READ_DATA;
-        snprintf(buf, 128, "LPWG mode read Noise data failed!\n");
+        sprintf(buf, "LPWG mode read Noise data failed!\n");
         err_cnt++;
         goto TEST_END;
     }
@@ -3358,9 +3500,8 @@ static void nvt_black_screen_test(void *chip_data, char *message)
                     TPD_INFO("LPWG Noise RawData_Diff_Max Test failed at rawdata[%d][%d] = %d[%d %d]\n",
                              i, j, noise_p_data[iArrayIndex], ph->config_Lmt_LPWG_Diff_N, ph->config_Lmt_LPWG_Diff_P);
                     if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "LPWG Noise RawData_Diff_Max[%d][%d] = %d[%d %d]\n",
-                                 i, j, noise_p_data[iArrayIndex], ph->config_Lmt_LPWG_Diff_N, ph->config_Lmt_LPWG_Diff_P);
+                        sprintf(buf, "LPWG Noise RawData_Diff_Max[%d][%d] = %d[%d %d]\n",
+                                i, j, noise_p_data[iArrayIndex], ph->config_Lmt_LPWG_Diff_N, ph->config_Lmt_LPWG_Diff_P);
                     }
                     err_cnt++;
                 }
@@ -3379,9 +3520,8 @@ static void nvt_black_screen_test(void *chip_data, char *message)
                     TPD_INFO("LPWG Noise RawData_Diff_Min Test failed at rawdata[%d][%d] = %d[%d %d]\n",
                              i, j, noise_n_data[iArrayIndex], ph->config_Lmt_LPWG_Diff_N,  ph->config_Lmt_LPWG_Diff_P);
                     if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "LPWG Noise RawData_Diff_Min[%d][%d] = %d[%d %d]\n",
-                                 i, j, noise_n_data[iArrayIndex], ph->config_Lmt_LPWG_Diff_N,  ph->config_Lmt_LPWG_Diff_P);
+                        sprintf(buf, "LPWG Noise RawData_Diff_Min[%d][%d] = %d[%d %d]\n",
+                                i, j, noise_n_data[iArrayIndex], ph->config_Lmt_LPWG_Diff_N,  ph->config_Lmt_LPWG_Diff_P);
                     }
                     err_cnt++;
                 }
@@ -3399,9 +3539,8 @@ static void nvt_black_screen_test(void *chip_data, char *message)
                     noise_p_record[iArrayIndex] = 1;
                     TPD_INFO("LPWG Noise RawData_Diff_Max Test failed at rawdata[%d][%d] = %d\n", i, j, raw_data[iArrayIndex]);
                     if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "LPWG Noise RawData_Diff_Max[%d][%d] = %d[%d %d]\n",
-                                 i, j, noise_p_data[iArrayIndex], lpwg_diff_rawdata_N[iArrayIndex], lpwg_diff_rawdata_P[iArrayIndex]);
+                        sprintf(buf, "LPWG Noise RawData_Diff_Max[%d][%d] = %d[%d %d]\n",
+                                i, j, noise_p_data[iArrayIndex], lpwg_diff_rawdata_N[iArrayIndex], lpwg_diff_rawdata_P[iArrayIndex]);
                     }
                     err_cnt++;
                 }
@@ -3419,150 +3558,13 @@ static void nvt_black_screen_test(void *chip_data, char *message)
                     noise_n_record[iArrayIndex] = 1;
                     TPD_INFO("LPWG Noise RawData_Diff_Min Test failed at rawdata[%d][%d] = %d\n", i, j, noise_n_data[iArrayIndex]);
                     if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "LPWG Noise RawData_Diff_Min[%d][%d] = %d[%d %d]\n",
-                                 i, j, noise_n_data[iArrayIndex], lpwg_diff_rawdata_N[iArrayIndex], lpwg_diff_rawdata_P[iArrayIndex]);
+                        sprintf(buf, "LPWG Noise RawData_Diff_Min[%d][%d] = %d[%d %d]\n",
+                                i, j, noise_n_data[iArrayIndex], lpwg_diff_rawdata_N[iArrayIndex], lpwg_diff_rawdata_P[iArrayIndex]);
                     }
                     err_cnt++;
                 }
             }
             TPD_DEBUG_NTAG("\n");
-        }
-    }
-
-    //---FDM Noise Test---
-    TPD_INFO("FDM FW Noise Test \n");
-    memset(fdm_noise_p_data, 0, buf_len); //store max
-    memset(fdm_noise_n_data, 0, buf_len); //store min
-    memset(fdm_noise_p_record, 0, record_len);
-    memset(fdm_noise_n_record, 0, record_len);
-    fdm_noise_p_result = NVT_MP_PASS;
-    fdm_noise_n_result = NVT_MP_PASS;
-    if (nvt_read_doze_fw_noise(chip_info, ph->config_FDM_Noise_Test_Frame, ph->fdm_X_Channel, fdm_noise_p_data, fdm_noise_n_data, buf_len) != 0) {
-        TPD_INFO("read FDM Noise data failed!\n");
-        fdm_noise_p_result = NVT_MP_FAIL_READ_DATA;
-        fdm_noise_n_result = NVT_MP_FAIL_READ_DATA;
-        snprintf(buf, 128, "read FDM Noise data failed!\n");
-        err_cnt++;
-        goto TEST_END;
-    }
-
-    if ((ph->config_Lmt_FDM_Diff_P != 0) && (ph->config_Lmt_FDM_Diff_N != 0)) {
-        for (j = 0; j < rx_num; j++) {
-            for (i = 0; i < ph->fdm_X_Channel; i++) {
-                iArrayIndex = j * ph->fdm_X_Channel + i;
-                if((fdm_noise_p_data[iArrayIndex] > ph->config_Lmt_FDM_Diff_P) \
-                   || (fdm_noise_p_data[iArrayIndex] < ph->config_Lmt_FDM_Diff_N)) {
-                    fdm_noise_p_result = NVT_MP_FAIL;
-                    fdm_noise_p_record[iArrayIndex] = 1;
-                    TPD_INFO("FDM Noise RawData_Diff_Max Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_noise_p_data[iArrayIndex], ph->config_Lmt_FDM_Diff_N, ph->config_Lmt_FDM_Diff_P);
-                    if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "FDM Noise RawData_Diff_Max Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_noise_p_data[iArrayIndex], ph->config_Lmt_FDM_Diff_N, ph->config_Lmt_FDM_Diff_P);
-                    }
-                    err_cnt++;
-                }
-            }
-        }
-
-        for (j = 0; j < rx_num; j++) {
-            for (i = 0; i < ph->fdm_X_Channel; i++) {
-                iArrayIndex = j * ph->fdm_X_Channel + i;
-                if((fdm_noise_n_data[iArrayIndex] > ph->config_Lmt_FDM_Diff_P) \
-                   || (fdm_noise_n_data[iArrayIndex] < ph->config_Lmt_FDM_Diff_N)) {
-                    fdm_noise_n_result = NVT_MP_FAIL;
-                    fdm_noise_n_record[iArrayIndex] = 1;
-                    TPD_INFO("FDM Noise RawData_Diff_Min Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_noise_n_data[iArrayIndex], ph->config_Lmt_FDM_Diff_N, ph->config_Lmt_FDM_Diff_P);
-                    if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "FDM Noise RawData_Diff_Min Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_noise_n_data[iArrayIndex], ph->config_Lmt_FDM_Diff_N, ph->config_Lmt_FDM_Diff_P);
-                    }
-                    err_cnt++;
-                }
-            }
-        }
-    } else {
-        for (j = 0; j < rx_num; j++) {
-            for (i = 0; i < ph->fdm_X_Channel; i++) {
-                iArrayIndex = j * ph->fdm_X_Channel + i;
-                if((fdm_noise_n_data[iArrayIndex] > fdm_diff_rawdata_P[iArrayIndex]) \
-                   || (fdm_noise_n_data[iArrayIndex] < fdm_diff_rawdata_N[iArrayIndex])) {
-                    fdm_noise_p_result = NVT_MP_FAIL;
-                    fdm_noise_p_record[iArrayIndex] = 1;
-                    TPD_INFO("FDM Noise RawData_Diff_Max Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_noise_n_data[iArrayIndex], fdm_diff_rawdata_N[iArrayIndex], fdm_diff_rawdata_P[iArrayIndex]);
-                    if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "FDM Noise RawData_Diff_Max Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_noise_n_data[iArrayIndex], fdm_diff_rawdata_N[iArrayIndex], fdm_diff_rawdata_P[iArrayIndex]);
-                    }
-                    err_cnt++;
-                }
-            }
-        }
-        for (j = 0; j < rx_num; j++) {
-            for (i = 0; i < ph->fdm_X_Channel; i++) {
-                iArrayIndex = j * ph->fdm_X_Channel + i;
-                if((fdm_noise_n_data[iArrayIndex] > fdm_diff_rawdata_P[iArrayIndex]) \
-                   || (fdm_noise_n_data[iArrayIndex] < fdm_diff_rawdata_N[iArrayIndex])) {
-                    fdm_noise_n_result = NVT_MP_FAIL;
-                    fdm_noise_n_record[iArrayIndex] = 1;
-                    TPD_INFO("FDM Noise RawData_Diff_Min Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_noise_n_data[iArrayIndex], fdm_diff_rawdata_N[iArrayIndex], fdm_diff_rawdata_P[iArrayIndex]);
-                    if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "FDM Noise RawData_Diff_Min Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_noise_n_data[iArrayIndex], fdm_diff_rawdata_N[iArrayIndex], fdm_diff_rawdata_P[iArrayIndex]);
-                    }
-                    err_cnt++;
-                }
-            }
-        }
-    }
-
-    //---FDM FW Rawdata Test---
-    TPD_INFO("FDM FW Rawdata Test \n");
-    memset(fdm_raw_data, 0, buf_len);
-    memset(fdm_raw_record, 0, record_len);
-    fdm_rawdata_result = NVT_MP_PASS;
-    if(nvt_read_doze_baseline(chip_info, ph->fdm_X_Channel, fdm_raw_data, buf_len) != 0) {
-        TPD_INFO("read FDM FW Rawdata failed!\n");
-        fdm_rawdata_result = NVT_MP_FAIL_READ_DATA;
-        snprintf(buf, 128,
-                 "read FDM FW Rawdata failed!\n");
-        err_cnt++;
-        goto TEST_END;
-    }
-
-    if ((ph->config_Lmt_FDM_Rawdata_P != 0) && (ph->config_Lmt_FDM_Rawdata_N != 0)) {
-        for (j = 0; j < rx_num; j++) {
-            for (i = 0; i < ph->fdm_X_Channel; i++) {
-                iArrayIndex = j * ph->fdm_X_Channel + i;
-                if((fdm_raw_data[iArrayIndex] > ph->config_Lmt_FDM_Rawdata_P) \
-                   || (fdm_raw_data[iArrayIndex] < ph->config_Lmt_FDM_Rawdata_N)) {
-                    fdm_rawdata_result = NVT_MP_FAIL;
-                    fdm_raw_record[iArrayIndex] = 1;
-                    TPD_INFO("FDM FW Rawdata Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_raw_data[iArrayIndex], ph->config_Lmt_FDM_Rawdata_N, ph->config_Lmt_FDM_Rawdata_P);
-                    if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "FDM FW Rawdata Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_raw_data[iArrayIndex], ph->config_Lmt_FDM_Rawdata_N, ph->config_Lmt_FDM_Rawdata_P);
-                    }
-                    err_cnt++;
-                }
-            }
-        }
-    } else {
-        for (j = 0; j < rx_num; j++) {
-            for (i = 0; i < ph->fdm_X_Channel; i++) {
-                iArrayIndex = j * ph->fdm_X_Channel + i;
-                if((fdm_raw_data[iArrayIndex] > fdm_rawdata_P[iArrayIndex]) \
-                   || (fdm_raw_data[iArrayIndex] < fdm_rawdata_N[iArrayIndex])) {
-                    fdm_rawdata_result = NVT_MP_FAIL;
-                    fdm_raw_record[iArrayIndex] = 1;
-                    TPD_INFO("FDM FW Rawdata Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_raw_data[iArrayIndex], fdm_rawdata_N[iArrayIndex], fdm_rawdata_P[iArrayIndex]);
-                    if (!err_cnt) {
-                        snprintf(buf, 128,
-                                 "FDM FW Rawdata Test failed at data[%d][%d] = %d [%d,%d]\n", i, j, fdm_raw_data[iArrayIndex], fdm_rawdata_N[iArrayIndex], fdm_rawdata_P[iArrayIndex]);
-                    }
-                    err_cnt++;
-                }
-            }
         }
     }
 
@@ -3592,6 +3594,8 @@ TEST_END:
     fd = sys_open(data_buf, O_WRONLY | O_CREAT | O_TRUNC, 0);
     if (fd < 0) {
         TPD_INFO("Open log file '%s' failed.\n", data_buf);
+        //sprintf(buf, "Open log file '%s' failed.\n", data_buf);
+        //err_cnt++;
         goto OUT;
     }
 
@@ -3622,15 +3626,6 @@ TEST_END:
     /* 3. noise min      */
     nvt_store_testrecord_to_file(fd, "LPWG Noise RawData_Diff_Min",
                                  noise_n_result, noise_n_record, tx_num, rx_num);
-    /* 4. fdm noise max */
-    nvt_store_testrecord_to_file(fd, "FDM RawData_Diff_Max",
-                                 fdm_noise_p_result, fdm_noise_p_record, ph->fdm_X_Channel, rx_num);
-    /* 5. fdm noise min */
-    nvt_store_testrecord_to_file(fd, "FDM RawData_Diff_Min",
-                                 fdm_noise_n_result, fdm_noise_n_record, ph->fdm_X_Channel, rx_num);
-    /* 6. fdm rawdata   */
-    nvt_store_testrecord_to_file(fd, "FDM FW Rawdata",
-                                 fdm_rawdata_result, fdm_raw_record, ph->fdm_X_Channel, rx_num);
 
     /* 1. rawdata        */
     nvt_store_testdata_to_file(fd, "LPWG mode FW Rawdata",
@@ -3641,15 +3636,6 @@ TEST_END:
     /* 3. noise min      */
     nvt_store_testdata_to_file(fd, "LPWG Noise RawData_Diff_Min",
                                noise_n_result, noise_n_data, tx_num, rx_num);
-    /* 4. fdm noise max */
-    nvt_store_testdata_to_file(fd, "FDM RawData_Diff_Max",
-                               fdm_noise_p_result, fdm_noise_p_data, ph->fdm_X_Channel, rx_num);
-    /* 5. fdm noise min */
-    nvt_store_testdata_to_file(fd, "FDM RawData_Diff_Min",
-                               fdm_noise_n_result, fdm_noise_n_data, ph->fdm_X_Channel, rx_num);
-    /* 6. fdm rawdata   */
-    nvt_store_testdata_to_file(fd, "FDM FW Rawdata",
-                               fdm_rawdata_result, fdm_raw_data, ph->fdm_X_Channel, rx_num);
 
 OUT:
     if (fd >= 0) {
@@ -3657,41 +3643,30 @@ OUT:
     }
     set_fs(old_fs);
 
-    snprintf(message, MESSAGE_SIZE, "%d errors. %s", err_cnt, buf);
+    sprintf(message, "%d errors. %s", err_cnt, buf);
     TPD_INFO("%d errors. %s", err_cnt, buf);
 
-RELEASE_DATA:
+RELEASE_RRECORD_DATA:
     if (raw_record)
         kfree(raw_record);
     if (noise_p_record)
         kfree(noise_p_record);
     if (noise_n_record)
         kfree(noise_n_record);
-    if (fdm_noise_p_record)
-        kfree(fdm_noise_p_record);
-    if (fdm_noise_n_record)
-        kfree(fdm_noise_n_record);
-    if (fdm_raw_record)
-        kfree(fdm_raw_record);
 
+RELEASE_DATA:
     if (raw_data)
         kfree(raw_data);
     if (noise_p_data)
         kfree(noise_p_data);
     if (noise_n_data)
         kfree(noise_n_data);
-    if (fdm_noise_p_data)
-        kfree(fdm_noise_p_data);
-    if (fdm_noise_n_data)
-        kfree(fdm_noise_n_data);
-    if (fdm_raw_data)
-        kfree(fdm_raw_data);
 
 RELEASE_FIRMWARE:
     release_firmware(fw);
     kfree(fw_name_test);
     fw_name_test = NULL;
-    chip_info->need_judge_irq_throw = false;
+    enable_irq(chip_info->irq_num);
 }
 
 static void nvt_set_touch_direction(void *chip_data, uint8_t dir)
@@ -3707,20 +3682,6 @@ static uint8_t nvt_get_touch_direction(void *chip_data)
 
     return chip_info->touch_direction;
 }
-
-static bool nvt_irq_throw_away(void *chip_data)
-{
-    struct chip_data_nt36525b *chip_info;
-    chip_info = (struct chip_data_nt36525b *)chip_data;
-    if (chip_info->need_judge_irq_throw) {
-        TPD_INFO("wake up the throw away irq!\n");
-        return true;
-
-    }
-
-    return false;
-}
-
 
 static struct oppo_touchpanel_operations nvt_ops = {
     .ftm_process                = nvt_ftm_process,
@@ -3740,7 +3701,6 @@ static struct oppo_touchpanel_operations nvt_ops = {
     .reset_gpio_control         = nvt_reset_gpio_control,
     .set_touch_direction        = nvt_set_touch_direction,
     .get_touch_direction        = nvt_get_touch_direction,
-    .tp_irq_throw_away          = nvt_irq_throw_away,
 };
 
 static void nvt_data_read(struct seq_file *s, struct chip_data_nt36525b *chip_info, DEBUG_READ_TYPE read_type)
@@ -3914,7 +3874,7 @@ static __maybe_unused void nvt_dbg_diff_status_change_read(struct seq_file *s, v
 
 static void nvt_main_register_read(struct seq_file *s, void *chip_data)
 {
-    uint8_t buf[4];
+    uint8_t buf[3];
     struct chip_data_nt36525b *chip_info = (struct chip_data_nt36525b *)chip_data;
 
     if (!chip_info)
@@ -3941,7 +3901,6 @@ static void nvt_main_register_read(struct seq_file *s, void *chip_data)
     seq_printf(s, "DEBUG_DIFFDATA_FLAG:%d\n", (buf[2] >> DEBUG_DIFFDATA_FLAG) & 0x01);
     seq_printf(s, "DEBUG_WKG_COORD_FLAG:%d\n", (buf[2] >> DEBUG_WKG_COORD_FLAG) & 0x01);
     seq_printf(s, "DEBUG_WKG_COORD_RECORD_FLAG:%d\n", (buf[2] >> DEBUG_WKG_COORD_RECORD_FLAG) & 0x01);
-    seq_printf(s, "DEBUG_WATER_POLLING_FLAG:%d\n", (buf[2] >> DEBUG_WATER_POLLING_FLAG) & 0x01);
 
 }
 
@@ -3954,6 +3913,127 @@ static struct debug_info_proc_operations debug_info_proc_ops = {
     //.dbg_gesture_record_coor_read = nvt_dbg_gesture_record_coor_read, //TODO: link to oppo common driver
     .main_register_read = nvt_main_register_read,
 };
+
+static void nvt_enable_doze_noise_collect(struct chip_data_nt36525b *chip_info, int32_t frame_num)
+{
+    int ret = -1;
+    uint8_t buf[8] = {0};
+
+    //---set xdata index to EVENT BUF ADDR---
+    ret = nvt_set_page(chip_info, chip_info->trim_id_table.mmap->EVENT_BUF_ADDR);
+
+    //---enable noise collect---
+    buf[0] = EVENT_MAP_HOST_CMD;
+    buf[1] = 0x4B;
+    buf[2] = 0xAA;
+    buf[3] = frame_num;
+    buf[4] = 0x00;
+    ret |= CTP_SPI_WRITE(chip_info->s_client, buf, 5);
+    if (ret < 0) {
+        TPD_INFO("%s failed\n", __func__);
+    }
+}
+
+static int32_t nvt_read_doze_fw_noise(struct chip_data_nt36525b *chip_info, int32_t config_Doze_Noise_Test_Frame, int32_t doze_X_Channel, int32_t *xdata, int32_t *xdata_n, int32_t xdata_len)
+{
+    uint8_t buf[128] = {0};
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t rx_num = chip_info->hw_res->RX_NUM;
+    int32_t iArrayIndex = 0;
+    int32_t frame_num = 0;
+
+    if (xdata_len / sizeof(int32_t) < rx_num * doze_X_Channel) {
+        TPD_INFO("read doze nosie buffer(%d) less than data size(%d)\n", xdata_len, rx_num * doze_X_Channel);
+        return -1;
+    }
+
+    //---Enter Test Mode---
+    if (nvt_clear_fw_status(chip_info)) {
+        return -EAGAIN;
+    }
+
+    frame_num = config_Doze_Noise_Test_Frame / 10;
+    if (frame_num <= 0)
+        frame_num = 1;
+    TPD_INFO("%s: frame_num=%d\n", __func__, frame_num);
+    nvt_enable_doze_noise_collect(chip_info, frame_num);
+    // need wait PS_Config_Doze_Noise_Test_Frame * 8.3ms
+    msleep(frame_num * 83);
+
+    if (nvt_polling_hand_shake_status(chip_info)) {
+        return -EAGAIN;
+    }
+
+    for (x = 0; x < doze_X_Channel; x++) {
+        //---change xdata index---
+        nvt_set_page(chip_info, chip_info->trim_id_table.mmap->DIFF_PIPE0_ADDR + rx_num * doze_X_Channel * x);
+
+        //---read data---
+        buf[0] = (chip_info->trim_id_table.mmap->DIFF_PIPE0_ADDR + rx_num * doze_X_Channel * x) & 0xFF;
+        CTP_SPI_READ(chip_info->s_client, buf, rx_num * 2 + 1);
+
+        for (y = 0; y < rx_num; y++) {
+            xdata[y * doze_X_Channel + x] = (uint16_t)(buf[y * doze_X_Channel + 1] + 256 * buf[y * doze_X_Channel + 2]);
+        }
+    }
+
+    for (y = 0; y < rx_num; y++) {
+        for (x = 0; x < doze_X_Channel; x++) {
+            iArrayIndex = y * doze_X_Channel + x;
+            xdata_n[iArrayIndex] = (int8_t)(xdata[iArrayIndex] & 0xFF) * 4;
+            xdata[iArrayIndex] = (int8_t)((xdata[iArrayIndex] >> 8) & 0xFF) * 4;    //scaling up
+        }
+    }
+
+    //---Leave Test Mode---
+    //nvt_change_mode(NORMAL_MODE);    //No return to normal mode. Continuous to get doze rawdata
+
+    return 0;
+}
+
+static int32_t nvt_read_doze_baseline(struct chip_data_nt36525b *chip_info, int32_t doze_X_Channel, int32_t *xdata, int32_t xdata_len)
+{
+    uint8_t buf[256] = {0};
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t rm_num = chip_info->hw_res->RX_NUM;
+    int32_t iArrayIndex = 0;
+
+    //---Enter Test Mode---
+    //nvt_change_mode(TEST_MODE_2);
+
+    //if (nvt_check_fw_status()) {
+    //    return -EAGAIN;
+    //}
+    if (xdata_len / sizeof(int32_t) < rm_num * doze_X_Channel) {
+        TPD_INFO("read doze baseline buffer(%d) less than data size(%d)\n", xdata_len, rm_num * doze_X_Channel);
+        return -1;
+    }
+
+    for (x = 0; x < doze_X_Channel; x++) {
+        //---change xdata index---
+        nvt_set_page(chip_info, chip_info->trim_id_table.mmap->DOZE_GM_S1D_SCAN_RAW_ADDR + rm_num * doze_X_Channel * x);
+
+        //---read data---
+        buf[0] = (chip_info->trim_id_table.mmap->DOZE_GM_S1D_SCAN_RAW_ADDR + rm_num * doze_X_Channel * x) & 0xFF;
+        CTP_SPI_READ(chip_info->s_client, buf, rm_num * 2 + 1);
+        for (y = 0; y < rm_num; y++) {
+            xdata[y * 2 + x] = (uint16_t)(buf[y * 2 + 1] + 256 * buf[y * 2 + 2]);
+        }
+    }
+
+    for (y = 0; y < rm_num; y++) {
+        for (x = 0; x < doze_X_Channel; x++) {
+            iArrayIndex = y * doze_X_Channel + x;
+            xdata[iArrayIndex] = (int16_t)xdata[iArrayIndex];
+        }
+    }
+
+    //---Leave Test Mode---
+    nvt_change_mode(chip_info, NORMAL_MODE);
+    return 0;
+}
 
 static void nvt_enable_short_test(struct chip_data_nt36525b *chip_info)
 {
@@ -4849,10 +4929,7 @@ static struct nvt_proc_operations nvt_proc_ops = {
 
 static void nova_apk_game_set(void *chip_data, bool on_off)
 {
-    struct chip_data_nt36525b *chip_info;
-    chip_info = (struct chip_data_nt36525b *)chip_data;
     nvt_mode_switch(chip_data, MODE_GAME, on_off);
-    chip_info->lock_point_status = on_off;
 }
 
 static bool nova_apk_game_get(void *chip_data)
@@ -5062,29 +5139,6 @@ static bool nova_apk_noise_get(void *chip_data)
 
 }
 
-static void nova_apk_water_set(void *chip_data, int type)
-{
-    struct chip_data_nt36525b *chip_info;
-    chip_info = (struct chip_data_nt36525b *)chip_data;
-    //ilitek_mode_switch(chip_data, MODE_CHARGE, on_off);
-    if (type > 0) {
-        nvt_enable_water_polling_mode(chip_info, true);
-    } else {
-        nvt_enable_water_polling_mode(chip_info, false);
-    }
-
-    chip_info->water_sta = type;
-
-}
-
-static int nova_apk_water_get(void *chip_data)
-{
-    struct chip_data_nt36525b *chip_info;
-    chip_info = (struct chip_data_nt36525b *)chip_data;
-
-    return chip_info->water_sta;
-
-}
 
 static int  nova_apk_tp_info_get(void *chip_data, char *buf, int len)
 {
@@ -5123,8 +5177,6 @@ static void nova_init_oppo_apk_op(struct touchpanel_data *ts)
         ts->apk_op->apk_charger_set = nova_apk_charger_set;
         ts->apk_op->apk_charger_get = nova_apk_charger_get;
         ts->apk_op->apk_tp_info_get = nova_apk_tp_info_get;
-        ts->apk_op->apk_water_set = nova_apk_water_set;
-        ts->apk_op->apk_water_get = nova_apk_water_get;
         //apk_op->apk_data_type_set = ili_apk_data_type_set;
         //apk_op->apk_rawdata_get = ili_apk_rawdata_get;
         //apk_op->apk_diffdata_get = ili_apk_diffdata_get;
@@ -5140,7 +5192,7 @@ static void nova_init_oppo_apk_op(struct touchpanel_data *ts)
 
 
 /*********** Start of SPI Driver and Implementation of it's callbacks*************************/
-int __maybe_unused nvt_tp_probe(struct spi_device *client)
+static int nvt_tp_probe(struct spi_device *client)
 {
     struct chip_data_nt36525b *chip_info = NULL;
     struct touchpanel_data *ts = NULL;
@@ -5272,9 +5324,9 @@ int __maybe_unused nvt_tp_probe(struct spi_device *client)
 
     // update fw in probe
 #ifdef CONFIG_TOUCHPANEL_MTK_PLATFORM
-    if (ts->boot_mode == RECOVERY_BOOT || is_oem_unlocked() || ts->fw_update_in_probe_with_headfile)
+    if (ts->boot_mode == RECOVERY_BOOT || ts->fw_update_in_probe_with_headfile)
 #else
-    if (ts->boot_mode == MSM_BOOT_MODE__RECOVERY || is_oem_unlocked() || ts->fw_update_in_probe_with_headfile)
+    if (ts->boot_mode == MSM_BOOT_MODE__RECOVERY || ts->fw_update_in_probe_with_headfile)
 #endif
     {
         TPD_INFO("In Recovery mode, no-flash download fw by headfile\n");
@@ -5316,7 +5368,7 @@ ts_malloc_failed:
     return ret;
 }
 
-int __maybe_unused nvt_tp_remove(struct spi_device *client)
+static int nvt_tp_remove(struct spi_device *client)
 {
     struct touchpanel_data *ts = spi_get_drvdata(client);
 
@@ -5325,3 +5377,85 @@ int __maybe_unused nvt_tp_remove(struct spi_device *client)
 
     return 0;
 }
+
+static int nvt_spi_suspend(struct device *dev)
+{
+    struct touchpanel_data *ts = dev_get_drvdata(dev);
+
+    TPD_INFO("%s: is called\n", __func__);
+    tp_i2c_suspend(ts);
+
+    return 0;
+}
+
+static int nvt_spi_resume(struct device *dev)
+{
+    struct touchpanel_data *ts = dev_get_drvdata(dev);
+
+    TPD_INFO("%s is called\n", __func__);
+    tp_i2c_resume(ts);
+
+    return 0;
+}
+
+static const struct spi_device_id tp_id[] = {
+#ifdef CONFIG_TOUCHPANEL_MULTI_NOFLASH
+    { "oppo,tp_noflash", 0 },
+#else
+    {TPD_DEVICE, 0},
+#endif
+    {},
+};
+
+static struct of_device_id tp_match_table[] = {
+#ifdef CONFIG_TOUCHPANEL_MULTI_NOFLASH
+    { .compatible = "oppo,tp_noflash",},
+#else
+    { .compatible = TPD_DEVICE, },
+#endif
+    { },
+};
+
+static const struct dev_pm_ops tp_pm_ops = {
+#ifdef CONFIG_FB
+    .suspend = nvt_spi_suspend,
+    .resume = nvt_spi_resume,
+#endif
+};
+
+static struct spi_driver tp_spi_driver = {
+    .probe      = nvt_tp_probe,
+    .remove     = nvt_tp_remove,
+    .id_table   = tp_id,
+    .driver = {
+        .name   = TPD_DEVICE,
+        .owner  = THIS_MODULE,
+        .of_match_table = tp_match_table,
+        .pm = &tp_pm_ops,
+    },
+};
+
+
+static int32_t __init nvt_driver_init(void)
+{
+    TPD_INFO("%s is called\n", __func__);
+    if (!tp_judge_ic_match(TPD_DEVICE))
+        return -1;
+
+    if (spi_register_driver(&tp_spi_driver) != 0) {
+        TPD_INFO("unable to add spi driver.\n");
+        return -1;
+    }
+    return 0;
+}
+
+static void __exit nvt_driver_exit(void)
+{
+    spi_unregister_driver(&tp_spi_driver);
+}
+
+module_init(nvt_driver_init);
+module_exit(nvt_driver_exit);
+
+MODULE_DESCRIPTION("Novatek Touchscreen Driver");
+MODULE_LICENSE("GPL");

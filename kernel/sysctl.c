@@ -62,6 +62,13 @@
 #include <linux/capability.h>
 #include <linux/binfmts.h>
 #include <linux/sched/sysctl.h>
+
+#ifdef VENDOR_EDIT
+//Ming.Liu@PSW.CN.WiFi.Network.quality.1065762, 2016/10/09
+//add for: [monitor tcp info]
+#include <net/tcp.h>
+#endif /* VENDOR_EDIT */
+
 #include <linux/sched/coredump.h>
 #include <linux/kexec.h>
 #include <linux/bpf.h>
@@ -69,11 +76,6 @@
 
 #include <linux/uaccess.h>
 #include <asm/processor.h>
-
-#ifdef VENDOR_EDIT
-/* Hailong.Liu@TECH.Kernel.CPU, 2019/10/24, stat cpu usage on each tick. */
-#include <linux/kernel_stat.h>
-#endif /* VENDOR_EDIT */
 
 #ifdef CONFIG_X86
 #include <asm/nmi.h>
@@ -125,45 +127,50 @@ static int sixty = 60;
 #endif
 
 static int __maybe_unused neg_one = -1;
-static int __maybe_unused neg_three = -3;
 
 static int zero;
 static int __maybe_unused one = 1;
 static int __maybe_unused two = 2;
-static int __maybe_unused three = 3;
 static int __maybe_unused four = 4;
 static unsigned long zero_ul;
 static unsigned long one_ul = 1;
 static unsigned long long_max = LONG_MAX;
+static int one_hundred = 100;
 
 #ifdef VENDOR_EDIT //yixue.ge@PSW.BSP.Kernel.Driver 20170720 add for add direct_vm_swappiness
+static int two_hundred = 200;
 extern int direct_vm_swappiness;
+#else
+#ifdef CONFIG_MTK_GMO_RAM_OPTIMIZE
 static int two_hundred = 200;
 #endif
-
-static int one_hundred = 100;
-static int one_thousand = 1000;
-#ifdef CONFIG_SCHED_WALT
-static int two_million = 2000000;
 #endif
+static int one_thousand = 1000;
 #ifdef VENDOR_EDIT
 /*Huacai.Zhou@PSW.BSP.Kernel.Performance, 2018-04-28, add foreground task io opt*/
 unsigned int sysctl_fg_io_opt = 1;
 #endif /*VENDOR_EDIT*/
-
-//#ifdef COLOROS_EDIT
-/*Tiren.Ma@ROM.Framework, 2019-12-10, add for improving ed task migration*/
-int sysctl_ed_task_enabled = 1;
-//#endif /*COLOROS_EDIT*/
-
 #ifdef VENDOR_EDIT
 /*jason.tang@TECH.BSP.Kernel.Storage, 2019-05-20, add control ext4 fsync*/
+#ifdef CONFIG_EXT4_FSYNC
 unsigned int sysctl_ext4_fsync_enable = 1;
+#else
+unsigned int sysctl_ext4_fsync_enable = 0;
+#endif
 unsigned int ext4_fsync_enable_status = 0;
 #endif /*VENDOR_EDIT*/
 #ifdef VENDOR_EDIT
 /*jason.tang@TECH.BSP.Kernel.Storage, 2019-05-20, add to count flush*/
 unsigned long sysctl_blkdev_issue_flush_count = 0;
+#endif /*VENDOR_EDIT*/
+
+#ifdef VENDOR_EDIT
+/*tianwen@PSW.BSP.Kernel.Storage, 2020-01-08, add async discard switch*/
+#ifdef CONFIG_EXT4_ASYNC_DISCARD_SUPPORT
+unsigned int sysctl_ext4_async_discard_enable = 1;
+#else
+unsigned int sysctl_ext4_async_discard_enable = 0;
+#endif
 #endif /*VENDOR_EDIT*/
 
 #ifdef CONFIG_PRINTK
@@ -172,9 +179,6 @@ static int ten_thousand = 10000;
 #ifdef CONFIG_PERF_EVENTS
 static int six_hundred_forty_kb = 640 * 1024;
 #endif
-static int max_kswapd_threads = MAX_KSWAPD_THREADS;
-
-static int two_hundred_fifty_five = 255;
 
 /* this is needed for the proc_doulongvec_minmax of vm_dirty_bytes */
 static unsigned long dirty_bytes_min = 2 * PAGE_SIZE;
@@ -343,6 +347,7 @@ static int max_sched_tunable_scaling = SCHED_TUNABLESCALING_END-1;
 #endif /* CONFIG_SCHED_DEBUG */
 
 #ifdef VENDOR_EDIT
+// Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
 int sysctl_uifirst_enabled = 1;
 int sysctl_launcher_boost_enabled = 0;
 #endif /* VENDOR_EDIT */
@@ -360,147 +365,16 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
-#if defined(CONFIG_PREEMPT_TRACER) || defined(CONFIG_DEBUG_PREEMPT)
-	{
-		.procname       = "preemptoff_tracing_threshold_ns",
-		.data           = &sysctl_preemptoff_tracing_threshold_ns,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
-	},
-#endif
-#if defined(CONFIG_IRQSOFF_TRACER) && defined(CONFIG_PREEMPTIRQ_EVENTS)
-	{
-		.procname       = "irqsoff_tracing_threshold_ns",
-		.data           = &sysctl_irqsoff_tracing_threshold_ns,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
-	},
-#endif
-#ifdef CONFIG_SCHED_WALT
-	{
-		.procname       = "sched_cpu_high_irqload",
-		.data           = &sysctl_sched_cpu_high_irqload,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
-	},
-	{
-		.procname	= "sched_group_upmigrate",
-		.data		= &sysctl_sched_group_upmigrate_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= walt_proc_update_handler,
-		.extra1		= &sysctl_sched_group_downmigrate_pct,
-	},
-	{
-		.procname	= "sched_group_downmigrate",
-		.data		= &sysctl_sched_group_downmigrate_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= walt_proc_update_handler,
-		.extra1		= &zero,
-		.extra2		= &sysctl_sched_group_upmigrate_pct,
-	},
-	{
-		.procname	= "sched_boost",
-		.data		= &sysctl_sched_boost,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_boost_handler,
-		.extra1		= &neg_three,
-		.extra2		= &three,
-	},
-	{
-		.procname	= "sched_conservative_pl",
-		.data		= &sysctl_sched_conservative_pl,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-	{
-		.procname	= "sched_many_wakeup_threshold",
-		.data		= &sysctl_sched_many_wakeup_threshold,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &two,
-		.extra2		= &one_thousand,
-	},
-	{
-		.procname	= "sched_walt_rotate_big_tasks",
-		.data		= &sysctl_sched_walt_rotate_big_tasks,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-	{
-		.procname	= "sched_min_task_util_for_boost",
-		.data		= &sysctl_sched_min_task_util_for_boost,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one_thousand,
-	},
-	{
-		.procname	= "sched_min_task_util_for_colocation",
-		.data		= &sysctl_sched_min_task_util_for_colocation,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one_thousand,
-	},
-	{
-		.procname	= "sched_little_cluster_coloc_fmin_khz",
-		.data		= &sysctl_sched_little_cluster_coloc_fmin_khz,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_little_cluster_coloc_fmin_khz_handler,
-		.extra1		= &zero,
-		.extra2		= &two_million,
-	},
-#endif
-	{
-		.procname	= "sched_upmigrate",
-		.data		= &sysctl_sched_capacity_margin_up,
-		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
-		.mode		= 0644,
-		.proc_handler	= sched_updown_migrate_handler,
-	},
-	{
-		.procname	= "sched_downmigrate",
-		.data		= &sysctl_sched_capacity_margin_down,
-		.maxlen		= sizeof(unsigned int) * MAX_MARGIN_LEVELS,
-		.mode		= 0644,
-		.proc_handler	= sched_updown_migrate_handler,
-	},
 #ifdef VENDOR_EDIT
 /*Huacai.Zhou@PSW.BSP.Kernel.Performance, 2018-04-28, add foreground task io opt*/
-{
+	{
 		.procname	= "fg_io_opt",
-		.data		= &sysctl_fg_io_opt,
-		.maxlen		= sizeof(int),
+		.data	= &sysctl_fg_io_opt,
+		.maxlen	= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
-},
+	},
 #endif
-//#ifdef COLOROS_EDIT
-/*Tiren.Ma@ROM.Framework, 2019-12-10, add for improving ed task migration */
-{
-        .procname   = "ed_task_enabled",
-        .data       = &sysctl_ed_task_enabled,
-        .maxlen     = sizeof(int),
-        .mode       = 0666,
-        .proc_handler = proc_dointvec,
-},
-//#endif
 #ifdef VENDOR_EDIT
 /*jason.tang@TECH.BSP.Kernel.Storage, 2019-05-20, add control ext4 fsync*/
 {
@@ -517,6 +391,17 @@ static struct ctl_table kern_table[] = {
 		.procname	= "blkdev_issue_flush_count",
 		.data		= &sysctl_blkdev_issue_flush_count,
 		.maxlen		= sizeof(unsigned long),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+},
+#endif
+
+#ifdef VENDOR_EDIT
+/*tianwen@PSW.BSP.Kernel.Storage, 2020-01-08, add async discard switch*/
+{
+		.procname	= "ext4_async_discard_enable",
+		.data		= &sysctl_ext4_async_discard_enable,
+		.maxlen		= sizeof(unsigned int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 },
@@ -541,6 +426,45 @@ static struct ctl_table kern_table[] = {
 		.extra1		= &min_sched_granularity_ns,
 		.extra2		= &max_sched_granularity_ns,
 	},
+#ifdef CONFIG_MTK_SCHED_BOOST
+	{
+		.procname       = "sched_isolation_hint",
+		.data           = &sysctl_sched_isolation_hint_enable,
+		.maxlen         = sizeof(unsigned int),
+		.mode           = 0644,
+		.proc_handler   = proc_dointvec,
+	},
+#endif
+#ifdef CONFIG_SCHED_WALT
+	{
+		.procname	= "sched_use_walt_cpu_util",
+		.data		= &sysctl_sched_use_walt_cpu_util,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "sched_use_walt_task_util",
+		.data		= &sysctl_sched_use_walt_task_util,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "sched_walt_init_task_load_pct",
+		.data		= &sysctl_sched_walt_init_task_load_pct,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "sched_walt_cpu_high_irqload",
+		.data		= &sysctl_sched_walt_cpu_high_irqload,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif
 	{
 		.procname	= "sched_sync_hint_enable",
 		.data		= &sysctl_sched_sync_hint_enable,
@@ -595,6 +519,15 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &one,
+	},
+	{
+		.procname	= "sched_big_task_rotation",
+		.data		= &sysctl_sched_rotation_enable,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &one,
 	},
 #ifdef CONFIG_SCHEDSTATS
 	{
@@ -670,6 +603,22 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= sched_rr_handler,
 	},
+#ifdef CONFIG_UCLAMP_TASK
+	{
+		.procname	= "sched_uclamp_util_min",
+		.data		= &sysctl_sched_uclamp_util_min,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_uclamp_handler,
+	},
+	{
+		.procname	= "sched_uclamp_util_max",
+		.data		= &sysctl_sched_uclamp_util_max,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_uclamp_handler,
+	},
+#endif
 #ifdef CONFIG_SCHED_AUTOGROUP
 	{
 		.procname	= "sched_autogroup_enabled",
@@ -691,22 +640,15 @@ static struct ctl_table kern_table[] = {
 		.extra1		= &one,
 	},
 #endif
+#ifdef CONFIG_SCHED_TUNE
 	{
-		.procname	= "sched_lib_name",
-		.data		= sched_lib_name,
-		.maxlen		= LIB_PATH_LENGTH,
+		.procname	= "sched_stune_task_threshold",
+		.data		= &stune_task_threshold,
+		.maxlen		= sizeof(stune_task_threshold),
 		.mode		= 0644,
-		.proc_handler	= proc_dostring,
+		.proc_handler   = &sched_stune_task_threshold_handler,
 	},
-	{
-		.procname	= "sched_lib_mask_force",
-		.data		= &sched_lib_mask_force,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_douintvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &two_hundred_fifty_five,
-	},
+#endif
 #ifdef CONFIG_PROVE_LOCKING
 	{
 		.procname	= "prove_locking",
@@ -1344,7 +1286,8 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0666,
 		.proc_handler	= proc_dostring,
 	},
-
+#endif
+#if defined(VENDOR_EDIT) && defined(CONFIG_DEATH_HEALER)
 /* Wen.Luo@BSP.Kernel.Stability, 2019/01/12, DeathHealer , Foreground background optimization,change max io count */
 	{
 		.procname	= "hung_task_maxiowait_count",
@@ -1355,16 +1298,6 @@ static struct ctl_table kern_table[] = {
 		.extra1		= &five,
 	},
 #endif
-	{
-		.procname	= "hung_task_selective_monitoring",
-		.data		= &sysctl_hung_task_selective_monitoring,
-		.maxlen		= sizeof(int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-
 #endif
 #ifdef CONFIG_RT_MUTEXES
 	{
@@ -1489,52 +1422,23 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &one,
 	},
 #endif
-#if defined(CONFIG_ARM) || defined(CONFIG_ARM64)
-	{
-		.procname	= "boot_reason",
-		.data		= &boot_reason,
-		.maxlen		= sizeof(int),
-		.mode		= 0444,
-		.proc_handler	= proc_dointvec,
-	},
-
-	{
-		.procname	= "cold_boot",
-		.data		= &cold_boot,
-		.maxlen		= sizeof(int),
-		.mode		= 0444,
-		.proc_handler	= proc_dointvec,
-	},
-#endif
 #ifdef VENDOR_EDIT
 // Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
-	{
-		.procname	= "uifirst_enabled",
-		.data		= &sysctl_uifirst_enabled,
-		.maxlen 	= sizeof(int),
-		.mode		= 0666,
-		.proc_handler = proc_dointvec,
-	},
-	{
-		.procname	= "launcher_boost_enabled",
-		.data		= &sysctl_launcher_boost_enabled,
-		.maxlen 	= sizeof(int),
-		.mode		= 0666,
-		.proc_handler = proc_dointvec,
-	},
+    {
+        .procname   = "uifirst_enabled",
+        .data       = &sysctl_uifirst_enabled,
+        .maxlen     = sizeof(int),
+        .mode       = 0666,
+        .proc_handler = proc_dointvec,
+    },
+    {
+        .procname   = "launcher_boost_enabled",
+        .data       = &sysctl_launcher_boost_enabled,
+        .maxlen     = sizeof(int),
+        .mode       = 0666,
+        .proc_handler = proc_dointvec,
+    },
 #endif /* VENDOR_EDIT */
-#ifdef VENDOR_EDIT
-/* Hailong.Liu@TECH.Kernel.CPU, 2019/10/24, stat cpu usage on each tick. */
-	{
-		.procname	= "task_cpustats_enable",
-		.data		= &sysctl_task_cpustats_enable,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0666,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-#endif
 	{ }
 };
 
@@ -1548,6 +1452,15 @@ static struct ctl_table vm_table[] = {
 		.extra1		= &zero,
 		.extra2		= &two,
 	},
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	{
+		.procname	= "speculative_page_fault",
+		.data		= &sysctl_speculative_page_fault,
+		.maxlen		= sizeof(sysctl_speculative_page_fault),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif
 	{
 		.procname	= "panic_on_oom",
 		.data		= &sysctl_panic_on_oom,
@@ -1570,13 +1483,6 @@ static struct ctl_table vm_table[] = {
 		.maxlen		= sizeof(sysctl_oom_dump_tasks),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
-	},
-	{
-		.procname       = "reap_mem_on_sigkill",
-		.data           = &sysctl_reap_mem_on_sigkill,
-		.maxlen         = sizeof(sysctl_reap_mem_on_sigkill),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
 	},
 	{
 		.procname	= "overcommit_ratio",
@@ -1669,10 +1575,18 @@ static struct ctl_table vm_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &zero,
-#ifdef VENDOR_EDIT //yixue.ge@PSW.BSP.Kernel.Driver 20170720 add for add direct_vm_swappiness
-		.extra2		= &two_hundred,
+#ifdef VENDOR_EDIT
+                .extra2         = &two_hundred,
+#else
+#ifndef CONFIG_MTK_GMO_RAM_OPTIMIZE
+#ifdef VENDOR_EDIT
+        .extra2		= &two_hundred,
 #else
 		.extra2		= &one_hundred,
+#endif /*VENDOR_EDIT*/		
+#else
+		.extra2		= &two_hundred,
+#endif
 #endif
 	},
 #ifdef VENDOR_EDIT //yixue.ge@PSW.BSP.Kernel.Driver 20170720 add for add direct_vm_swappiness
@@ -1686,15 +1600,6 @@ static struct ctl_table vm_table[] = {
 		.extra2 	= &two_hundred,
 	},
 #endif
-	{
-		.procname       = "want_old_faultaround_pte",
-		.data           = &want_old_faultaround_pte,
-		.maxlen         = sizeof(want_old_faultaround_pte),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec_minmax,
-		.extra1         = &zero,
-		.extra2         = &one,
-	},
 #ifdef CONFIG_HUGETLB_PAGE
 	{
 		.procname	= "nr_hugepages",
@@ -1799,15 +1704,6 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= watermark_scale_factor_sysctl_handler,
 		.extra1		= &one,
 		.extra2		= &one_thousand,
-	},
-	{
-		.procname	= "kswapd_threads",
-		.data		= &kswapd_threads,
-		.maxlen		= sizeof(kswapd_threads),
-		.mode		= 0644,
-		.proc_handler	= kswapd_threads_sysctl_handler,
-		.extra1		= &one,
-		.extra2		= &max_kswapd_threads,
 	},
 	{
 		.procname	= "extra_free_kbytes",
@@ -2020,22 +1916,6 @@ static struct ctl_table vm_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= (void *)&mmap_rnd_compat_bits_min,
 		.extra2		= (void *)&mmap_rnd_compat_bits_max,
-	},
-#endif
-#ifdef CONFIG_SWAP
-	{
-		.procname	= "swap_ratio",
-		.data		= &sysctl_swap_ratio,
-		.maxlen		= sizeof(sysctl_swap_ratio),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-	},
-	{
-		.procname	= "swap_ratio_enable",
-		.data		= &sysctl_swap_ratio_enable,
-		.maxlen		= sizeof(sysctl_swap_ratio_enable),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
 	},
 #endif
 	{ }
@@ -2843,6 +2723,149 @@ int proc_dointvec(struct ctl_table *table, int write,
 	return do_proc_dointvec(table, write, buffer, lenp, ppos, NULL, NULL);
 }
 
+#ifdef VENDOR_EDIT
+//Ming.Liu@PSW.CN.WiFi.Network.quality.1065762, 2016/10/09,
+//add for: [monitor tcp info]
+static int proc_put_string(void __user **dst_buf, size_t *buf_size, char * src_str, int str_len)
+{
+	if (*buf_size >= str_len) {
+		char __user **buffer = (char __user **)dst_buf;
+		if ( copy_to_user(*buffer, src_str, str_len)) {
+			printk(KERN_INFO "[proc_put_string] return -EFAULT; \n");
+			return -EFAULT;
+		}
+		(*buf_size) -= str_len;
+		(*buffer) += str_len;
+		*dst_buf = *buffer;
+		return 0;
+	}
+
+	return -EFAULT;
+}
+
+static int proc_string_memcpy(void **dst_buf, size_t *buf_size, char * src_str, int str_len)
+{
+	if (*buf_size >= str_len) {
+		char **buffer = (char **)dst_buf;
+		memcpy(*buffer, src_str, str_len);
+		(*buf_size) -= str_len;
+		(*buffer) += str_len;
+		*dst_buf = *buffer;
+		return 0;
+	}
+
+	return -EFAULT;
+}
+
+
+
+static int proc_put_one_tcpinfo(void **dst_buf, size_t *buf_size, struct tcp_info *info)
+{
+	char tmp[500];
+	int len;
+
+
+
+	len = sprintf(tmp, "state=%-10u ca_state=%-10u options=%-10u rto=%-10u ato=%-10u unacked=%-10u last_d_s=%-10u last_d_r=%-10u last_a_r=%-10u rtt=%-10u rcv_space=%-10u t_retrans=%-10u \n",
+					info->tcpi_state, info->tcpi_ca_state, info->tcpi_options, info->tcpi_rto, info->tcpi_ato, info->tcpi_unacked,
+					info->tcpi_last_data_sent, info->tcpi_last_data_recv, info->tcpi_last_ack_recv, info->tcpi_rtt, info->tcpi_rcv_space, info->tcpi_total_retrans);
+
+	if (proc_string_memcpy(dst_buf, buf_size, tmp, len)) {
+		return -EFAULT;
+	}
+	return 0;
+}
+
+
+int proc_do_print_tcpinfo(struct ctl_table *table, int write,
+		     void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	size_t left_count = *lenp;
+	size_t temp_len = *lenp;
+	void *mem_buff_ptr = NULL;
+	void *temp_buff_ptr = NULL;
+	int tcp_info_print = -1;
+
+	if (table->data) {
+		tcp_info_print = *((int *)table->data);
+	}
+
+	if ((tcp_info_print < 0) && (!table->data || !table->maxlen || !*lenp || (*ppos && !write))) {
+		*lenp = 0;
+		return 0;
+	}
+
+
+	if (! write && buffer) {
+		struct tcp_info tcpinfo;
+		unsigned int bucket;
+
+		int print_counter = -1;
+
+		mem_buff_ptr = kmalloc(left_count, GFP_ATOMIC);
+		if (!mem_buff_ptr) {
+			printk(KERN_INFO "[proc_do_tcpinfoprint] kmalloc is fail; mem_buff_ptr = NULL\n");
+			goto put_return;
+		}
+		temp_buff_ptr = mem_buff_ptr;
+
+		for (bucket = 0; bucket <= tcp_hashinfo.ehash_mask; bucket++) {
+			struct sock *sk;
+			struct hlist_nulls_node *node;
+
+			sk_nulls_for_each(sk, node, &tcp_hashinfo.ehash[bucket].chain) {
+
+				//Fix bug1102870: tcp_get_info cause APPS Crash
+				sock_hold(sk);
+
+				if ((sk->sk_state == TCP_TIME_WAIT) || (sk->sk_state == TCP_NEW_SYN_RECV)) {
+					__sock_put(sk);
+					continue;
+				}
+
+				print_counter ++;
+
+				if (print_counter < tcp_info_print) {
+					__sock_put(sk);
+					continue;
+				}
+
+
+				tcp_get_info(sk, &tcpinfo);
+				//Fix bug1102870: tcp_get_info cause APPS Crash
+				__sock_put(sk);
+
+				if (proc_put_one_tcpinfo(&temp_buff_ptr, &left_count, &tcpinfo)) {
+					if (table->data) {  //save print tcpinfo sk index
+					    *((int *)table->data) = print_counter;
+					}
+					goto put_return;
+				}
+
+			}
+		}
+		if (table->data) {  //recover tcp_info_print value
+			*((int *)table->data) = -1;
+		}
+
+	}
+
+
+put_return:
+
+	if (mem_buff_ptr) {
+		proc_put_string(&buffer, &temp_len, mem_buff_ptr, (*lenp) - left_count);
+		kfree(mem_buff_ptr);
+	}
+	*lenp -= left_count;
+	*ppos += left_count;
+
+
+
+	return 0;
+}
+#endif /* VENDOR_EDIT */
+
 /**
  * proc_douintvec - read a vector of unsigned integers
  * @table: the sysctl table
@@ -3118,8 +3141,10 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int 
 			if (neg)
 				continue;
 			val = convmul * val / convdiv;
-			if ((min && val < *min) || (max && val > *max))
-				continue;
+			if ((min && val < *min) || (max && val > *max)) {
+				err = -EINVAL;
+				break;
+			}
 			*i = val;
 		} else {
 			val = convdiv * (*i) / convmul;
@@ -3508,43 +3533,6 @@ int proc_do_large_bitmap(struct ctl_table *table, int write,
 	}
 }
 
-static int do_proc_douintvec_capacity_conv(bool *negp, unsigned long *lvalp,
-					   int *valp, int write, void *data)
-{
-	if (write) {
-		/*
-		 * The sched_upmigrate/sched_downmigrate tunables are
-		 * accepted in percentage. Limit them to 100.
-		 */
-		if (*negp || *lvalp == 0 || *lvalp > 100)
-			return -EINVAL;
-		*valp = SCHED_FIXEDPOINT_SCALE * 100 / *lvalp;
-	} else {
-		*negp = false;
-		*lvalp = SCHED_FIXEDPOINT_SCALE * 100 / *valp;
-	}
-
-	return 0;
-}
-
-/**
- * proc_douintvec_capacity - read a vector of integers in percentage and convert
- *			    into sched capacity
- * @table: the sysctl table
- * @write: %TRUE if this is a write to the sysctl file
- * @buffer: the user buffer
- * @lenp: the size of the user buffer
- * @ppos: file position
- *
- * Returns 0 on success.
- */
-int proc_douintvec_capacity(struct ctl_table *table, int write,
-			    void __user *buffer, size_t *lenp, loff_t *ppos)
-{
-	return do_proc_dointvec(table, write, buffer, lenp, ppos,
-				do_proc_douintvec_capacity_conv, NULL);
-}
-
 #else /* CONFIG_PROC_SYSCTL */
 
 int proc_dostring(struct ctl_table *table, int write,
@@ -3608,11 +3596,6 @@ int proc_doulongvec_ms_jiffies_minmax(struct ctl_table *table, int write,
     return -ENOSYS;
 }
 
-int proc_douintvec_capacity(struct ctl_table *table, int write,
-			    void __user *buffer, size_t *lenp, loff_t *ppos)
-{
-	return -ENOSYS;
-}
 
 #endif /* CONFIG_PROC_SYSCTL */
 

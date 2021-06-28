@@ -109,7 +109,7 @@ static void phx_dump_hang_oppo_log(const char *happen_time)
         PHX_KLOG_INFO("send hang oppo signal %d at %s", SIGPHX_HANG, happen_time);
         send_sig(SIGPHX_HANG, t_init, 0);
         //native process will handle remaining work
-        schedule_timeout_interruptible((30+30) * HZ); //Add 30s for get ftrace log
+        schedule_timeout_interruptible(30 * HZ);
     }
     // incase native error handle process hang or filesystem not ready
     panic(ERROR_HANG_OPPO);

@@ -16,10 +16,11 @@ config ARM
 	select ARCH_OPTIONAL_KERNEL_RWX if ARCH_HAS_STRICT_KERNEL_RWX
 	select ARCH_OPTIONAL_KERNEL_RWX_DEFAULT if CPU_V7
 	select ARCH_SUPPORTS_ATOMIC_RMW
+	select ARCH_HAS_PTE_SPECIAL if (ARM_LPAE || CPU_V7 || CPU_V7M || CPU_V6 || CPUV6K)
 	select ARCH_USE_BUILTIN_BSWAP
 	select ARCH_USE_CMPXCHG_LOCKREF
 	select ARCH_WANT_IPC_PARSE_VERSION
-	select ARM_PSCI_FW if PM
+	select ARCH_SUPPORTS_SPECULATIVE_PAGE_FAULT
 	select BUILDTIME_EXTABLE_SORT if MMU
 	select CLONE_BACKWARDS
 	select CPU_PM if (SUSPEND || CPU_IDLE)
@@ -66,7 +67,6 @@ config ARM
 	select HAVE_FTRACE_MCOUNT_RECORD if (!XIP_KERNEL)
 	select HAVE_FUNCTION_GRAPH_TRACER if (!THUMB2_KERNEL)
 	select HAVE_FUNCTION_TRACER if (!XIP_KERNEL)
-	select HAVE_FUTEX_CMPXCHG if FUTEX
 	select HAVE_GCC_PLUGINS
 	select HAVE_GENERIC_DMA_COHERENT
 	select HAVE_HW_BREAKPOINT if (PERF_EVENTS && (CPU_V6 || CPU_V6K || CPU_V7))
@@ -129,7 +129,7 @@ if ARM_DMA_USE_IOMMU
 config ARM_DMA_IOMMU_ALIGNMENT
 	int "Maximum PAGE_SIZE order of alignment for DMA IOMMU buffers"
 	range 4 9
-	default 9
+	default 8
 	help
 	  DMA mapping framework by default aligns all buffers to the smallest
 	  PAGE_SIZE order which is greater than or equal to the requested buffer
@@ -240,9 +240,6 @@ config NEED_RET_TO_USER
 	bool
 
 config ARCH_MTD_XIP
-	bool
-
-config ARCH_WANT_KMAP_ATOMIC_FLUSH
 	bool
 
 config VECTORS_BASE
@@ -553,34 +550,6 @@ config ARCH_PXA
 	select SPARSE_IRQ
 	help
 	  Support for Intel/Marvell's PXA2xx/PXA3xx processor line.
-
-config ARCH_QCOM
-       bool "Qualcomm MSM (non-multiplatform)"
-       select ARCH_REQUIRE_GPIOLIB
-       select CPU_V7
-       select AUTO_ZRELADDR
-       select HAVE_SMP
-       select CLKDEV_LOOKUP
-       select GENERIC_CLOCKEVENTS
-       select GENERIC_ALLOCATOR
-       select ARM_GIC
-       select ARM_PATCH_PHYS_VIRT
-       select ARM_HAS_SG_CHAIN
-       select ARCH_HAS_OPP
-       select SOC_BUS
-       select MULTI_IRQ_HANDLER
-       select PM_OPP
-       select SPARSE_IRQ
-       select USE_OF
-       select PINCTRL
-       select ARCH_WANT_KMAP_ATOMIC_FLUSH
-       select MFD_CORE
-       help
-         Support for Qualcomm MSM/QSD based systems.  This runs on the
-         apps processor of the MSM/QSD and depends on a shared memory
-         interface to the modem processor which runs the baseband
-         stack and controls some vital subsystems
-         (clock and power control, etc).
 
 config ARCH_RPC
 	bool "RiscPC"
@@ -1503,7 +1472,7 @@ config ARCH_NR_GPIO
 	int
 	default 2048 if ARCH_SOCFPGA
 	default 1024 if ARCH_BRCMSTB || ARCH_SHMOBILE || ARCH_TEGRA || \
-		ARCH_ZYNQ || ARCH_QCOM
+		ARCH_ZYNQ
 	default 512 if ARCH_EXYNOS || ARCH_KEYSTONE || SOC_OMAP5 || \
 		SOC_DRA7XX || ARCH_S3C24XX || ARCH_S3C64XX || ARCH_S5PV210
 	default 416 if ARCH_SUNXI
@@ -1904,26 +1873,6 @@ config BUILD_ARM_APPENDED_DTB_IMAGE
 	  Enabling this option will cause a concatenated zImage and list of
 	  DTBs to be built by default (instead of a standalone zImage.)
 	  The image will built in arch/arm/boot/zImage-dtb
-choice
-	prompt "Appended DTB Kernel Image name"
-	depends on BUILD_ARM_APPENDED_DTB_IMAGE
-	default ZIMG_DTB
-	help
-	  Enabling this option will cause a specific kernel image Image or
-	  Image.gz to be used for final image creation.
-	  The image will built in arch/arm/boot/IMAGE-NAME-dtb
-
-	config ZIMG_DTB
-		bool "zImage-dtb"
-	config IMG_DTB
-		bool "Image-dtb"
-endchoice
-
-config BUILD_ARM_APPENDED_KERNEL_IMAGE_NAME
-	string
-	depends on BUILD_ARM_APPENDED_DTB_IMAGE
-	default "zImage-dtb" if ZIMG_DTB
-	default "Image-dtb" if IMG_DTB
 
 config BUILD_ARM_APPENDED_DTB_IMAGE_NAMES
 	string "Default dtb names"
@@ -1931,6 +1880,22 @@ config BUILD_ARM_APPENDED_DTB_IMAGE_NAMES
 	help
 	  Space separated list of names of dtbs to append when
 	  building a concatenated zImage-dtb.
+
+config BUILD_ARM_DTB_OVERLAY_IMAGE
+	bool "Build a device tree overlay image"
+	depends on OF
+	help
+	  Enabling this option will casue overlay device tree
+	  to be built by default.
+	  Overlay DT contains device-specific configurations.
+	  Please be aware that bootloader supports DT merging.
+
+config BUILD_ARM_DTB_OVERLAY_IMAGE_NAMES
+	string "Default dtb overlay names"
+	depends on BUILD_ARM_DTB_OVERLAY_IMAGE
+	help
+	  Space separated list of names of dtbs to append when
+	  building a concatenated overlay image
 
 # Compressed boot loader in ROM.  Yes, we really want to ask about
 # TEXT and BSS so we preserve their values in the config files.

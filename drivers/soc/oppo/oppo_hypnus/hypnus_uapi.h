@@ -20,7 +20,6 @@
 #define NR_GPUS		1
 #define NR_DSPS		2
 #define NR_NPUS		1
-#define NR_MIGRATE	1
 
 /* ioctl part */
 #define HYPNUS_IOC_MAGIC	0xF4
@@ -57,8 +56,6 @@
 	_IOWR(HYPNUS_IOC_MAGIC, 0x35, struct hypnus_soc_info)
 #define IOCTL_HYPNUS_SET_FPSGO \
 	_IOW(HYPNUS_IOC_MAGIC, 0x36, unsigned int)
-#define IOCTL_HYPNUS_SET_THERMDELTA \
-	_IOW(HYPNUS_IOC_MAGIC, 0x37, int)
 #define IOCTL_HYPNUS_SUBMIT_DSPFREQ \
 	_IOW(HYPNUS_IOC_MAGIC, 0x40, struct hypnus_dspfreq_prop)
 #define IOCTL_HYPNUS_SUBMIT_NPUFREQ \
@@ -71,8 +68,8 @@ struct hypnus_boost_prop {
 };
 
 struct hypnus_migration_prop {
-	int up_migrate[NR_MIGRATE];
-	int down_migrate[NR_MIGRATE];
+	int up_migrate[NR_CLUSTERS];
+	int down_migrate[NR_CLUSTERS];
 };
 
 struct hypnus_ddr_prop {

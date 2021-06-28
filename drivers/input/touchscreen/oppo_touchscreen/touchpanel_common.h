@@ -82,8 +82,6 @@
 #define MAX_DEVICE_VERSION_LENGTH 16
 #define MAX_DEVICE_MANU_LENGTH    16
 
-#define MESSAGE_SIZE              (256)
-
 #define SYNAPTICS_PREFIX    "SY_"
 #define GOODIX_PREFIX       "GT_"
 #define FOCAL_PREFIX        "FT_"
@@ -431,14 +429,6 @@ struct fp_underscreen_info {
     uint16_t y;
 };
 
-typedef enum {
-    UNKNOWN_IC,
-    HIMAX83112A,
-    ILI9881H,
-    NT36525B
-} TP_USED_IC;
-
-
 //#define CONFIG_OPPO_TP_APK please define this in arch/arm64/configs
 #ifdef CONFIG_OPPO_TP_APK
 
@@ -451,7 +441,6 @@ typedef enum {
     APK_INFO       = 'I',
     APK_NOISE      = 'N',
     APK_PROXIMITY  = 'P',
-    APK_WATER      = 'W',
     APK_DEBUG_MODE = 'd',
     APK_GAME_MODE  = 'g'
 } APK_SWITCH_TYPE;
@@ -472,8 +461,6 @@ typedef struct apk_proc_operations {
     bool (*apk_debug_get)(void *chip_data);
     void (*apk_noise_set)(void *chip_data, bool on_off);
     bool (*apk_noise_get)(void *chip_data);
-    void (*apk_water_set)(void *chip_data, int type);
-    int (*apk_water_get)(void *chip_data);
     void (*apk_proximity_set)(void *chip_data, bool on_off);
     int  (*apk_proximity_dis)(void *chip_data);
     void (*apk_gesture_debug)(void *chip_data, bool on_off);
@@ -536,6 +523,7 @@ struct touchpanel_data {
     bool irq_trigger_hdl_support;                         /*some no-flash ic (such as TD4330) need irq to trigger hdl*/
     bool in_test_process;                               /*flag whether in test process*/
     bool noise_modetest_support;                         /*noise mode test is used*/
+    bool lcd_wait_tp_resume_finished_support;           /*lcd will wait tp resume finished*/
     bool fw_update_in_probe_with_headfile;
     u8   vk_bitmap ;                                     /*every bit declear one state of key "reserve(keycode)|home(keycode)|menu(keycode)|back(keycode)"*/
     vk_type  vk_type;                                   /*virtual_key type*/
@@ -579,6 +567,7 @@ struct touchpanel_data {
     bool skip_suspend_operate;                          /*LCD and TP is in one chip,lcd power off in suspend at first,
                                                          can not operate i2c when tp suspend*/
     bool ps_status;                                     /*save ps status, ps near = 1, ps far = 0*/
+    bool resume_finished;                               /* whether tp resume finished */
     int noise_level;                                     /*save ps status, ps near = 1, ps far = 0*/
 
 #if defined(TPD_USE_EINT)
@@ -637,6 +626,9 @@ struct touchpanel_data {
     void                  *private_data;                /*Reserved Private data*/
     char                  *earsense_delta;
     bool        disable_gesture_ctrl;   /*when lcd_trigger_load_tp_fw start no need to control gesture*/
+    bool        report_point_first_support;             /*if it happened baseline error,reporting point first or reporting error first. */
+    uint8_t     report_point_first_enable;              /*reporting points first enable :1 ,disable 0;*/
+
 #ifdef CONFIG_OPPO_TP_APK
     APK_OPERATION *apk_op;
     APK_SWITCH_TYPE type_now;
@@ -698,7 +690,8 @@ struct oppo_touchpanel_operations {
     void (*set_noise_modetest)  (void *chip_data, bool enable);
     uint8_t (*get_noise_modetest)  (void *chip_data);
     void (*tp_queue_work_prepare) (void);       /*If the tp ic need do something, use this!*/
-    bool (*tp_irq_throw_away)  (void *chip_data);
+    int    (*set_report_point_first)  (void *chip_data, uint32_t enable);
+    int (*get_report_point_first)  (void *chip_data);
 };
 
 struct debug_info_proc_operations {
@@ -749,7 +742,7 @@ void esd_handle_switch(struct esd_information *esd_info, bool on);
 void clear_view_touchdown_flag(void);
 void tp_touch_btnkey_release(void);
 extern int tp_util_get_vendor(struct hw_resource *hw_res, struct panel_info *panel_data);
-TP_USED_IC tp_judge_ic_match(void);
+extern bool tp_judge_ic_match(char *tp_ic_name);
 __attribute__((weak)) int request_firmware_select(const struct firmware **firmware_p, const char *name, struct device *device)
 {
     return 1;
@@ -758,11 +751,10 @@ __attribute__((weak)) int opticalfp_irq_handler(struct fp_underscreen_info *fp_t
 {
     return 0;
 }
-__attribute__((weak)) int get_lcd_status()
+__attribute__((weak)) int notify_display_fpd(bool mode)
 {
-    return 0;
+	return 0;
 }
-
 bool is_oem_unlocked(void);
 int __init get_oem_verified_boot_state(void);
 

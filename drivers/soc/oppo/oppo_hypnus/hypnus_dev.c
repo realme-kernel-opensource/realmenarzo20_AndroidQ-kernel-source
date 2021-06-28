@@ -70,8 +70,6 @@ static const struct hypnus_ioctl hypnus_ioctl_funcs[] = {
 				hypnus_ioctl_get_soc_info),
 	HYPNUS_IOCTL_FUNC(IOCTL_HYPNUS_SET_FPSGO,
 				hypnus_ioctl_set_fpsgo),
-	HYPNUS_IOCTL_FUNC(IOCTL_HYPNUS_SET_THERMDELTA,
-				hypnus_ioctl_set_therm_delta),
 	/* Storage */
 
 	/* DDR */

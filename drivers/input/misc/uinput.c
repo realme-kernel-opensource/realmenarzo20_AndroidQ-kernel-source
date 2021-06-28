@@ -43,8 +43,6 @@
 #include <linux/input/mt.h>
 #include "../input-compat.h"
 
-static DEFINE_MUTEX(uinput_glb_mutex);
-
 static int uinput_dev_event(struct input_dev *dev,
 			    unsigned int type, unsigned int code, int value)
 {
@@ -678,17 +676,9 @@ static unsigned int uinput_poll(struct file *file, poll_table *wait)
 static int uinput_release(struct inode *inode, struct file *file)
 {
 	struct uinput_device *udev = file->private_data;
-	int retval;
-
-	retval = mutex_lock_interruptible(&uinput_glb_mutex);
-	if (retval)
-		return retval;
 
 	uinput_destroy_device(udev);
-	file->private_data = NULL;
 	kfree(udev);
-
-	mutex_unlock(&uinput_glb_mutex);
 
 	return 0;
 }
@@ -820,7 +810,7 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 				 unsigned long arg, void __user *p)
 {
 	int			retval;
-	struct uinput_device	*udev;
+	struct uinput_device	*udev = file->private_data;
 	struct uinput_ff_upload ff_up;
 	struct uinput_ff_erase  ff_erase;
 	struct uinput_request   *req;
@@ -828,19 +818,9 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 	const char		*name;
 	unsigned int		size;
 
-	retval = mutex_lock_interruptible(&uinput_glb_mutex);
-	if (retval)
-		return retval;
-
-	udev = file->private_data;
-	if (!udev) {
-		retval = -EINVAL;
-		goto unlock_glb_mutex;
-	}
-
 	retval = mutex_lock_interruptible(&udev->mutex);
 	if (retval)
-		goto unlock_glb_mutex;
+		return retval;
 
 	if (!udev->dev) {
 		retval = uinput_allocate_device(udev);
@@ -1020,12 +1000,8 @@ static long uinput_ioctl_handler(struct file *file, unsigned int cmd,
 	}
 
 	retval = -EINVAL;
-
  out:
 	mutex_unlock(&udev->mutex);
-
- unlock_glb_mutex:
-	mutex_unlock(&uinput_glb_mutex);
 	return retval;
 }
 
@@ -1036,13 +1012,31 @@ static long uinput_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 #ifdef CONFIG_COMPAT
 
-#define UI_SET_PHYS_COMPAT	_IOW(UINPUT_IOCTL_BASE, 108, compat_uptr_t)
+/*
+ * These IOCTLs change their size and thus their numbers between
+ * 32 and 64 bits.
+ */
+#define UI_SET_PHYS_COMPAT		\
+	_IOW(UINPUT_IOCTL_BASE, 108, compat_uptr_t)
+#define UI_BEGIN_FF_UPLOAD_COMPAT	\
+	_IOWR(UINPUT_IOCTL_BASE, 200, struct uinput_ff_upload_compat)
+#define UI_END_FF_UPLOAD_COMPAT		\
+	_IOW(UINPUT_IOCTL_BASE, 201, struct uinput_ff_upload_compat)
 
 static long uinput_compat_ioctl(struct file *file,
 				unsigned int cmd, unsigned long arg)
 {
-	if (cmd == UI_SET_PHYS_COMPAT)
+	switch (cmd) {
+	case UI_SET_PHYS_COMPAT:
 		cmd = UI_SET_PHYS;
+		break;
+	case UI_BEGIN_FF_UPLOAD_COMPAT:
+		cmd = UI_BEGIN_FF_UPLOAD;
+		break;
+	case UI_END_FF_UPLOAD_COMPAT:
+		cmd = UI_END_FF_UPLOAD;
+		break;
+	}
 
 	return uinput_ioctl_handler(file, cmd, arg, compat_ptr(arg));
 }

@@ -35,6 +35,7 @@
 #include "sdcardfs.h"
 #include "xattr.h"
 extern ssize_t xattr_getsecurity(struct inode *, const char *, void *, size_t);
+
 int sdcardfs_setxattr(struct dentry *dentry)
 {
 	int error;

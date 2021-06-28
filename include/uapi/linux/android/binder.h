@@ -88,7 +88,6 @@ enum flat_binder_object_flags {
 	 * scheduling policy from the caller (for synchronous transactions).
 	 */
 	FLAT_BINDER_FLAG_INHERIT_RT = 0x800,
-#ifdef __KERNEL__
 
 	/**
 	 * @FLAT_BINDER_FLAG_TXN_SECURITY_CTX: request security contexts
@@ -97,7 +96,6 @@ enum flat_binder_object_flags {
 	 * context
 	 */
 	FLAT_BINDER_FLAG_TXN_SECURITY_CTX = 0x1000,
-#endif /* __KERNEL__ */
 };
 
 #ifdef BINDER_IPC_32BIT
@@ -334,13 +332,11 @@ struct binder_transaction_data {
 	} data;
 };
 
-#ifdef __KERNEL__
 struct binder_transaction_data_secctx {
 	struct binder_transaction_data transaction_data;
 	binder_uintptr_t secctx;
 };
 
-#endif /* __KERNEL__ */
 struct binder_transaction_data_sg {
 	struct binder_transaction_data transaction_data;
 	binder_size_t buffers_size;
@@ -376,13 +372,11 @@ enum binder_driver_return_protocol {
 	BR_OK = _IO('r', 1),
 	/* No parameters! */
 
-#ifdef __KERNEL__
 	BR_TRANSACTION_SEC_CTX = _IOR('r', 2,
 				      struct binder_transaction_data_secctx),
 	/*
 	 * binder_transaction_data_secctx: the received command.
 	 */
-#endif /* __KERNEL__ */
 	BR_TRANSACTION = _IOR('r', 2, struct binder_transaction_data),
 	BR_REPLY = _IOR('r', 3, struct binder_transaction_data),
 	/*
@@ -544,6 +538,16 @@ enum binder_driver_command_protocol {
 	 * binder_transaction_data_sg: the sent command.
 	 */
 };
+
+#ifdef VENDOR_EDIT
+//zhoumingjun@Swdp.shanghai, 2017/07/10, notify user space when binder transaction starts
+struct process_event_binder {
+    struct task_struct *src;
+    struct task_struct *dst;
+    __u32 code;
+    __u32 flags;
+};
+#endif
 
 #endif /* _UAPI_LINUX_BINDER_H */
 

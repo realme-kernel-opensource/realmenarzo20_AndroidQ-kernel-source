@@ -31,6 +31,9 @@ static struct touch_fw_data {
     u32 start_addr;
     u32 end_addr;
     u32 new_fw_cb;
+    int delay_after_upgrade;
+    bool isCRC;
+    bool isboot;
     int hex_tag;
 } tfd;
 
@@ -42,7 +45,7 @@ static struct flash_block_info {
     u32 mem_start;
     u32 fix_mem_start;
     u8 mode;
-} fbi[FW_BLOCK_INFO_NUM + 1];
+} fbi[FW_BLOCK_INFO_NUM];
 
 static u8 gestrue_fw[(10 * K)];
 
@@ -68,8 +71,7 @@ static u32 HexToDec(char *phex, s32 len)
 
 static u32 CalculateCRC32(u32 start_addr, u32 len, u8 *pfw)
 {
-    u32 i = 0;
-    u32 j = 0;
+    u32 i = 0, j = 0;
     u32 crc_poly = 0x04C11DB7;
     u32 tmp_crc = 0xFFFFFFFF;
 
@@ -77,11 +79,10 @@ static u32 CalculateCRC32(u32 start_addr, u32 len, u8 *pfw)
         tmp_crc ^= (pfw[i] << 24);
 
         for (j = 0; j < 8; j++) {
-            if ((tmp_crc & 0x80000000) != 0) {
-                tmp_crc = (tmp_crc << 1) ^ crc_poly;
-            } else {
+            if ((tmp_crc & 0x80000000) != 0)
+                tmp_crc = tmp_crc << 1 ^ crc_poly;
+            else
                 tmp_crc = tmp_crc << 1;
-            }
         }
     }
     return tmp_crc;
@@ -91,7 +92,7 @@ static int host_download_dma_check(u32 start_addr, u32 block_size, u32 *dma_crc)
 {
     int count = 50;
     u32 reg_data = 0;
-
+    int ret = 0;
     /* dma1 src1 adress */
     ilitek_ice_mode_write(0x072104, start_addr, 4);
     /* dma1 src1 format */
@@ -116,7 +117,6 @@ static int host_download_dma_check(u32 start_addr, u32 block_size, u32 *dma_crc)
 
     /* Polling BIT0 */
     while (count > 0) {
-        int ret = 0;
         mdelay(1);
         ret = ilitek_ice_mode_read(0x048006, &reg_data, sizeof(u8));
         TPD_DEBUG("busy = %x\n", reg_data);
@@ -295,7 +295,7 @@ static int ilitek_tddi_fw_iram_upgrade(u8 *pfw)
 
     if (idev->already_reset == false) {
         if (idev->actual_tp_mode != P5_X_FW_GESTURE_MODE) {
-            ilitek_tddi_reset_ctrl(ILITEK_RESET_METHOD);
+            ilitek_tddi_reset_ctrl(idev->reset);
             idev->ignore_first_irq = true;
         } else {
             idev->ignore_first_irq = false;
@@ -351,83 +351,83 @@ static int ilitek_tddi_fw_iram_upgrade(u8 *pfw)
     return ret;
 }
 
-static void ilitek_tddi_fw_update_block_info(u8 *pfw)
+static void ilitek_tddi_fw_update_block_info(u8 *pfw, u8 type)
 {
     u32 ges_area_section, ges_info_addr, ges_fw_start, ges_fw_end;
 
-    TPD_INFO("Upgarde = IRAM, Tag = %x\n", tfd.hex_tag);
+    TPD_INFO("Upgarde = %s, Tag = %x\n", type ? "IRAM" : "Flash", tfd.hex_tag);
 
+    if (type == UPGRADE_IRAM) {
+        if (tfd.hex_tag == BLOCK_TAG_AF) {
+            fbi[AP].mem_start = (fbi[AP].fix_mem_start != INT_MAX) ? fbi[AP].fix_mem_start : 0;
+            fbi[DATA].mem_start = (fbi[DATA].fix_mem_start != INT_MAX) ? fbi[DATA].fix_mem_start : DLM_START_ADDRESS;
+            fbi[TUNING].mem_start = (fbi[TUNING].fix_mem_start != INT_MAX) ? fbi[TUNING].fix_mem_start :  fbi[DATA].mem_start + fbi[DATA].len;
+            fbi[MP].mem_start = (fbi[MP].fix_mem_start != INT_MAX) ? fbi[MP].fix_mem_start :  0;
+            //fbi[GESTURE].mem_start = (fbi[GESTURE].fix_mem_start != INT_MAX) ? fbi[GESTURE].fix_mem_start :     0;
 
-    if (tfd.hex_tag == BLOCK_TAG_AF) {
-        fbi[AP].mem_start = (fbi[AP].fix_mem_start != INT_MAX) ? fbi[AP].fix_mem_start : 0;
-        fbi[DATA].mem_start = (fbi[DATA].fix_mem_start != INT_MAX) ? fbi[DATA].fix_mem_start : DLM_START_ADDRESS;
-        fbi[TUNING].mem_start = (fbi[TUNING].fix_mem_start != INT_MAX) ? fbi[TUNING].fix_mem_start :  fbi[DATA].mem_start + fbi[DATA].len;
-        fbi[MP].mem_start = (fbi[MP].fix_mem_start != INT_MAX) ? fbi[MP].fix_mem_start :  0;
-        //fbi[GESTURE].mem_start = (fbi[GESTURE].fix_mem_start != INT_MAX) ? fbi[GESTURE].fix_mem_start :     0;
+            /* Parsing gesture info form AP code */
+            ges_info_addr = (fbi[AP].end + 1 - 60);
+            ges_area_section = (pfw[ges_info_addr + 3] << 24) + (pfw[ges_info_addr + 2] << 16) + (pfw[ges_info_addr + 1] << 8) + pfw[ges_info_addr];
+            fbi[GESTURE].mem_start = (pfw[ges_info_addr + 7] << 24) + (pfw[ges_info_addr + 6] << 16) + (pfw[ges_info_addr + 5] << 8) + pfw[ges_info_addr + 4];
 
-        /* Parsing gesture info form AP code */
-        ges_info_addr = (fbi[AP].end + 1 - 60);
-        ges_area_section = (pfw[ges_info_addr + 3] << 24) + (pfw[ges_info_addr + 2] << 16) + (pfw[ges_info_addr + 1] << 8) + pfw[ges_info_addr];
-        fbi[GESTURE].mem_start = (pfw[ges_info_addr + 7] << 24) + (pfw[ges_info_addr + 6] << 16) + (pfw[ges_info_addr + 5] << 8) + pfw[ges_info_addr + 4];
+            ges_fw_start = (pfw[ges_info_addr + 15] << 24) + (pfw[ges_info_addr + 14] << 16) + (pfw[ges_info_addr + 13] << 8) + pfw[ges_info_addr + 12];
+            ges_fw_end = (pfw[ges_info_addr + 19] << 24) + (pfw[ges_info_addr + 18] << 16) + (pfw[ges_info_addr + 17] << 8) + pfw[ges_info_addr + 16];
+            fbi[GESTURE].len = ges_fw_end - ges_fw_start + 1;
+            if (fbi[GESTURE].len > 8 * K) {
+                TPD_INFO("WARRING!!!The gesture len is too long!!!The size is %d.\n", fbi[GESTURE].len);
+                fbi[GESTURE].len = 8 * K;
+            }
+            fbi[GESTURE].start = 0;
+        } else {
+            fbi[AP].start = 0;
+            fbi[AP].mem_start = 0;
+            fbi[AP].len = MAX_AP_FIRMWARE_SIZE;
 
-        ges_fw_start = (pfw[ges_info_addr + 15] << 24) + (pfw[ges_info_addr + 14] << 16) + (pfw[ges_info_addr + 13] << 8) + pfw[ges_info_addr + 12];
-        ges_fw_end = (pfw[ges_info_addr + 19] << 24) + (pfw[ges_info_addr + 18] << 16) + (pfw[ges_info_addr + 17] << 8) + pfw[ges_info_addr + 16];
-        fbi[GESTURE].len = ges_fw_end - ges_fw_start + 1;
-        if (fbi[GESTURE].len > 8 * K) {
-            TPD_INFO("WARRING!!!The gesture len is too long!!!The size is %d.\n", fbi[GESTURE].len);
-            fbi[GESTURE].len = 8 * K;
+            fbi[DATA].start = DLM_HEX_ADDRESS;
+            fbi[DATA].mem_start = DLM_START_ADDRESS;
+            fbi[DATA].len = MAX_DLM_FIRMWARE_SIZE;
+
+            fbi[MP].start = MP_HEX_ADDRESS;
+            fbi[MP].mem_start = 0;
+            fbi[MP].len = MAX_MP_FIRMWARE_SIZE;
+
+            /* Parsing gesture info form AP code */
+            ges_info_addr = (MAX_AP_FIRMWARE_SIZE - 60);
+            ges_area_section = (pfw[ges_info_addr + 3] << 24) + (pfw[ges_info_addr + 2] << 16) + (pfw[ges_info_addr + 1] << 8) + pfw[ges_info_addr];
+            fbi[GESTURE].mem_start = (pfw[ges_info_addr + 7] << 24) + (pfw[ges_info_addr + 6] << 16) + (pfw[ges_info_addr + 5] << 8) + pfw[ges_info_addr + 4];
+
+            ges_fw_start = (pfw[ges_info_addr + 15] << 24) + (pfw[ges_info_addr + 14] << 16) + (pfw[ges_info_addr + 13] << 8) + pfw[ges_info_addr + 12];
+            ges_fw_end = (pfw[ges_info_addr + 19] << 24) + (pfw[ges_info_addr + 18] << 16) + (pfw[ges_info_addr + 17] << 8) + pfw[ges_info_addr + 16];
+            fbi[GESTURE].len = ges_fw_end - ges_fw_start + 1;
+            if (fbi[GESTURE].len > 8 * K) {
+                TPD_INFO("WARRING!!!The gesture len is too long!!!The size is %d.\n", fbi[GESTURE].len);
+                fbi[GESTURE].len = 8 * K;
+            }
+            fbi[GESTURE].start = 0;
         }
-        fbi[GESTURE].start = 0;
-    } else {
-        fbi[AP].start = 0;
-        fbi[AP].mem_start = 0;
-        fbi[AP].len = MAX_AP_FIRMWARE_SIZE;
 
-        fbi[DATA].start = DLM_HEX_ADDRESS;
-        fbi[DATA].mem_start = DLM_START_ADDRESS;
-        fbi[DATA].len = MAX_DLM_FIRMWARE_SIZE;
+        memset(gestrue_fw, 0xff, sizeof(gestrue_fw));
 
-        fbi[MP].start = MP_HEX_ADDRESS;
-        fbi[MP].mem_start = 0;
-        fbi[MP].len = MAX_MP_FIRMWARE_SIZE;
+        /* Copy gesture data */
+        if (fbi[GESTURE].mem_start != 0xffffffff && ges_fw_start != 0xffffffff && fbi[GESTURE].mem_start != 0 && ges_fw_start != 0)
+            ipio_memcpy(gestrue_fw, (pfw + ges_fw_start), fbi[GESTURE].len, sizeof(gestrue_fw));
+        else
+            ipio_err("There is no gesture data inside fw\n");
 
-        /* Parsing gesture info form AP code */
-        ges_info_addr = (MAX_AP_FIRMWARE_SIZE - 60);
-        ges_area_section = (pfw[ges_info_addr + 3] << 24) + (pfw[ges_info_addr + 2] << 16) + (pfw[ges_info_addr + 1] << 8) + pfw[ges_info_addr];
-        fbi[GESTURE].mem_start = (pfw[ges_info_addr + 7] << 24) + (pfw[ges_info_addr + 6] << 16) + (pfw[ges_info_addr + 5] << 8) + pfw[ges_info_addr + 4];
+        TPD_INFO("gesture memory start = 0x%x, upgrade lenth = 0x%x, hex area = %d, ges_start_addr = 0x%x, ges_end_addr = 0x%x",
+                 fbi[GESTURE].mem_start, MAX_GESTURE_FIRMWARE_SIZE, ges_area_section, ges_fw_start, ges_fw_end);
 
-        ges_fw_start = (pfw[ges_info_addr + 15] << 24) + (pfw[ges_info_addr + 14] << 16) + (pfw[ges_info_addr + 13] << 8) + pfw[ges_info_addr + 12];
-        ges_fw_end = (pfw[ges_info_addr + 19] << 24) + (pfw[ges_info_addr + 18] << 16) + (pfw[ges_info_addr + 17] << 8) + pfw[ges_info_addr + 16];
-        fbi[GESTURE].len = ges_fw_end - ges_fw_start + 1;
-        if (fbi[GESTURE].len > 8 * K) {
-            TPD_INFO("WARRING!!!The gesture len is too long!!!The size is %d.\n", fbi[GESTURE].len);
-            fbi[GESTURE].len = 8 * K;
-        }
-        fbi[GESTURE].start = 0;
+        fbi[AP].name = "AP";
+        fbi[DATA].name = "DATA";
+        fbi[TUNING].name = "TUNING";
+        fbi[MP].name = "MP";
+        fbi[GESTURE].name = "GESTURE";
+
+        /* upgrade mode define */
+        fbi[DATA].mode = fbi[AP].mode = fbi[TUNING].mode = AP;
+        fbi[MP].mode = MP;
+        fbi[GESTURE].mode = GESTURE;
     }
-
-    memset(gestrue_fw, 0xff, sizeof(gestrue_fw));
-
-    /* Copy gesture data */
-    if (fbi[GESTURE].mem_start != 0xffffffff && ges_fw_start != 0xffffffff && fbi[GESTURE].mem_start != 0 && ges_fw_start != 0)
-        ipio_memcpy(gestrue_fw, (pfw + ges_fw_start), fbi[GESTURE].len, sizeof(gestrue_fw));
-    else
-        ipio_err("There is no gesture data inside fw\n");
-
-    TPD_INFO("gesture memory start = 0x%x, upgrade lenth = 0x%x, hex area = %d, ges_start_addr = 0x%x, ges_end_addr = 0x%x",
-             fbi[GESTURE].mem_start, MAX_GESTURE_FIRMWARE_SIZE, ges_area_section, ges_fw_start, ges_fw_end);
-
-    fbi[AP].name = "AP";
-    fbi[DATA].name = "DATA";
-    fbi[TUNING].name = "TUNING";
-    fbi[MP].name = "MP";
-    fbi[GESTURE].name = "GESTURE";
-
-    /* upgrade mode define */
-    fbi[DATA].mode = fbi[AP].mode = fbi[TUNING].mode = AP;
-    fbi[MP].mode = MP;
-    fbi[GESTURE].mode = GESTURE;
-
 
     /* Get hex fw vers */
     tfd.new_fw_cb = (pfw[FW_VER_ADDR] << 24) | (pfw[FW_VER_ADDR + 1] << 16) |
@@ -510,10 +510,8 @@ out:
     return ret;
 }
 
-static int ilitek_tddi_fw_hex_convert(u8 *pfw)
+static int ilitek_tddi_fw_hex_convert(u8 *phex, int size, u8 *pfw)
 {
-    u8 *phex = (u8 *)idev->tp_firmware.data;
-    int size = (int)idev->tp_firmware.size;
     int block = 0;
     u32 i = 0, j = 0, k = 0, num = 0;
     u32 len = 0, addr = 0, type = 0;
@@ -602,18 +600,121 @@ static int ilitek_tddi_fw_hex_convert(u8 *pfw)
     return 0;
 }
 
-int ilitek_tddi_fw_upgrade(void)
+static int ilitek_tdd_fw_hex_open(u8 open_file_method)
 {
-    int ret = -1;
-    int retry = 3;
-    u8 *pfw = NULL;
+    int fsize = 1;
+    u8 *hex_buffer = NULL;
+    const struct firmware *fw = NULL;
+    struct file *f = NULL;
+    mm_segment_t old_fs;
+    loff_t pos = 0;
 
+    TPD_INFO("Open file method = %s, path = %s\n",
+             open_file_method ? "FILP_OPEN" : "REQUEST_FIRMWARE", UPDATE_FW_PATH);
+
+    switch (open_file_method) {
+    case REQUEST_FIRMWARE:
+        if (request_firmware(&fw, UPDATE_FW_PATH, idev->dev) < 0) {
+            ipio_err("Rquest firmware failed\n");
+            return -ENOMEM;
+        }
+
+        fsize = fw->size;
+        TPD_INFO("fsize = %d\n", fsize);
+        if (fsize <= 0) {
+            ipio_err("The size of file is zero\n");
+            release_firmware(fw);
+            return -ENOMEM;
+        }
+
+        hex_buffer = vmalloc(fsize * sizeof(u8));
+        if (ERR_ALLOC_MEM(hex_buffer)) {
+            ipio_err("Failed to allocate hex_buffer memory, %ld\n", PTR_ERR(hex_buffer));
+            release_firmware(fw);
+            return -ENOMEM;
+        }
+
+        ipio_memcpy(hex_buffer, fw->data, fsize * sizeof(*fw->data), fsize);
+        release_firmware(fw);
+        break;
+    case FILP_OPEN:
+        f = filp_open(UPDATE_FW_PATH, O_RDONLY, 0644);
+        if (ERR_ALLOC_MEM(f)) {
+            ipio_err("Failed to open the file at %ld.\n", PTR_ERR(f));
+            return -ENOMEM;
+        }
+
+        fsize = f->f_inode->i_size;
+        TPD_INFO("fsize = %d\n", fsize);
+        if (fsize <= 0) {
+            ipio_err("The size of file is invaild\n");
+            filp_close(f, NULL);
+            return -ENOMEM;
+        }
+
+        hex_buffer = vmalloc(fsize * sizeof(u8));
+        if (ERR_ALLOC_MEM(hex_buffer)) {
+            ipio_err("Failed to allocate hex_buffer memory, %ld\n", PTR_ERR(hex_buffer));
+            filp_close(f, NULL);
+            return -ENOMEM;
+        }
+
+        /* ready to map user's memory to obtain data by reading files */
+        old_fs = get_fs();
+        set_fs(get_ds());
+        set_fs(KERNEL_DS);
+        pos = 0;
+        vfs_read(f, hex_buffer, fsize, &pos);
+        set_fs(old_fs);
+        filp_close(f, NULL);
+
+        ipio_vfree((void **) & (idev->tp_firmware.data));
+        //new fw data buffer
+        idev->tp_firmware.data = vmalloc(fsize);
+        if (idev->tp_firmware.data == NULL) {
+            TPD_INFO("kmalloc tp firmware data error\n");
+
+            idev->tp_firmware.data = vmalloc(fsize);
+            if (idev->tp_firmware.data == NULL) {
+                TPD_INFO("retry kmalloc tp firmware data error\n");
+                ipio_vfree((void **)&hex_buffer);
+                return -ENOMEM;
+            }
+        }
+
+        //copy bin fw to data buffer
+        memcpy((u8 *)idev->tp_firmware.data, (u8 *)hex_buffer, fsize);
+        if (0 == memcmp((u8 *)idev->tp_firmware.data, (u8 *)hex_buffer, fsize)) {
+            TPD_INFO("copy_fw_to_buffer fsize=%d\n", fsize);
+            idev->tp_firmware.size = fsize;
+        } else {
+            TPD_INFO("copy_fw_to_buffer fw error\n");
+            idev->tp_firmware.size = 0;
+        }
+        break;
+    default:
+        ipio_err("Unknown open file method, %d\n", open_file_method);
+        break;
+    }
+
+    ipio_vfree((void **)&hex_buffer);
+    return 0;
+}
+
+int ilitek_tddi_fw_upgrade(int upgrade_type, int file_type, int open_file_method)
+{
+    int ret = -1, retry = 3;
+    u8 *pfw = NULL;
     atomic_set(&idev->fw_stat, START);
 
     idev->esd_check_enabled = false;
 
     idev->fw_update_stat = 0;
-
+    if (open_file_method == FILP_OPEN) {
+        if (ilitek_tdd_fw_hex_open(open_file_method)) {
+            ipio_err("Failed to open hex file\n");
+        }
+    }
     pfw = vmalloc(MAX_HEX_FILE_SIZE * sizeof(u8));
     if (ERR_ALLOC_MEM(pfw)) {
         ipio_err("Failed to allocate pfw memory, %ld\n", PTR_ERR(pfw));
@@ -623,31 +724,31 @@ int ilitek_tddi_fw_upgrade(void)
 
     memset(pfw, 0xFF, MAX_HEX_FILE_SIZE * sizeof(u8));
 
+    TPD_INFO("Convert FW file from %s\n", (file_type == ILI_FILE ? "ILI_FILE" : "HEX_FILE"));
+
     if (idev->actual_tp_mode != P5_X_FW_GESTURE_MODE) {
-        if ((ERR_ALLOC_MEM(idev->tp_firmware.data))
-            || (0 == idev->tp_firmware.size)
-            || ilitek_tddi_fw_hex_convert(pfw) < 0) {
-            ipio_err("Open file fail, try upgrade from hex file\n");
+        if ((file_type == ILI_FILE) || (ERR_ALLOC_MEM(idev->tp_firmware.data)) || (0 == idev->tp_firmware.size)
+            || ilitek_tddi_fw_hex_convert((uint8_t *)idev->tp_firmware.data, idev->tp_firmware.size, pfw) < 0) {
+            ipio_err("Open hex file fail, try upgrade from ILI file\n");
             ret = ilitek_tddi_fw_ili_convert(pfw);
             if (ret < 0)
                 goto out;
         }
-        ilitek_tddi_fw_update_block_info(pfw);
+        ilitek_tddi_fw_update_block_info(pfw, upgrade_type);
     }
 
     do {
         ret = ilitek_tddi_fw_iram_upgrade(pfw);
 
-        if (ret == UPDATE_PASS) {
+        if (ret == UPDATE_PASS)
             break;
-        }
 
         ipio_err("Upgrade failed, do retry!\n");
     } while (--retry > 0);
 
     if (ret != UPDATE_PASS) {
         ipio_err("Upgrade firmware failed after retry 3 times\n");
-        ilitek_tddi_reset_ctrl(ILITEK_RESET_METHOD);
+        ilitek_tddi_reset_ctrl(idev->reset);
         ret = UPDATE_FAIL;
     }
     idev->already_upgrade = true;

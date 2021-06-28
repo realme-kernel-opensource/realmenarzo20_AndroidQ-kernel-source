@@ -142,17 +142,18 @@ alternative_else_nop_endif
 	// to save/restore them if required.
 	.macro	apply_ssbd, state, targ, tmp1, tmp2
 #ifdef CONFIG_ARM64_SSBD
-	ldr	\tmp1, =ssbd_state
-	ldr	\tmp1, [\tmp1]
-	cmp	\tmp1, #ARM64_SSBD_KERNEL
-	b.ne	\targ
+alternative_cb	arm64_enable_wa2_handling
+	b	\targ
+alternative_cb_end
 	ldr_this_cpu	\tmp2, arm64_ssbd_callback_required, \tmp1
 	cbz	\tmp2, \targ
 	ldr	\tmp2, [tsk, #TSK_TI_FLAGS]
 	tbnz	\tmp2, #TIF_SSBD, \targ
 	mov	w0, #ARM_SMCCC_ARCH_WORKAROUND_2
 	mov	w1, #\state
-	smc	#0
+alternative_cb	arm64_update_smccc_conduit
+	nop					// Patched to SMC/HVC #0
+alternative_cb_end
 #endif
 	.endm
 
@@ -547,6 +548,26 @@ ENDPROC(el1_error_invalid)
 	.align	6
 el1_sync:
 	kernel_entry 1
+	mov	x0, sp
+	get_thread_info x20	// top of stack
+	ldr	w4, [x20, #TI_CPU_EXCP]
+	add	w4, w4, #0x1
+	str	w4, [x20, #TI_CPU_EXCP]
+	cmp	w4, #0x1
+	b.ne	el1_sync_nest
+	str	x0, [x20, #TI_REGS_ON_EXCP]
+el1_sync_nest:
+	mrs	x1, esr_el1			// read the syndrome register
+	lsr	x24, x1, #ESR_ELx_EC_SHIFT	// exception class
+	cmp	x24, #ESR_ELx_EC_DABT_CUR	// data abort in EL1
+	b.ne	el1_sync_nest_skip_dec
+	sub	w4, w4, #0x1
+	str	w4, [x20, #TI_CPU_EXCP]
+el1_sync_nest_skip_dec:
+	cmp	w4, #0x2
+	b.lt	el1_sync_nest_skip
+	bl	aee_stop_nested_panic
+el1_sync_nest_skip:
 	mrs	x1, esr_el1			// read the syndrome register
 	lsr	x24, x1, #ESR_ELx_EC_SHIFT	// exception class
 	cmp	x24, #ESR_ELx_EC_DABT_CUR	// data abort in EL1
@@ -582,6 +603,13 @@ el1_da:
 	clear_address_tag x0, x3
 	mov	x2, sp				// struct pt_regs
 	bl	do_mem_abort
+	cmp	x24, #ESR_ELx_EC_DABT_CUR	// data abort in EL1
+	b.eq	el1_da_nest_skip_dec
+	get_thread_info x20	// top of stack
+	ldr	w4, [x20, #TI_CPU_EXCP]
+	sub	w4, w4, #0x1
+	str	w4, [x20, #TI_CPU_EXCP]
+el1_da_nest_skip_dec:
 
 	// disable interrupts before pulling preserved data off the stack
 	disable_irq
@@ -602,6 +630,10 @@ el1_undef:
 	enable_dbg
 	mov	x0, sp
 	bl	do_undefinstr
+	get_thread_info x20     // top of stack
+	ldr	w4, [x20, #TI_CPU_EXCP]
+	sub	w4, w4, #0x1
+	str	w4, [x20, #TI_CPU_EXCP]
 	kernel_exit 1
 el1_dbg:
 	/*
@@ -613,6 +645,11 @@ el1_dbg:
 	mrs	x0, far_el1
 	mov	x2, sp				// struct pt_regs
 	bl	do_debug_exception
+	get_thread_info x20	// top of stack
+	ldr	w4, [x20, #TI_CPU_EXCP]
+	sub	w4, w4, #0x1
+	str	w4, [x20, #TI_CPU_EXCP]
+
 	kernel_exit 1
 el1_inv:
 	// TODO: add support for undefined instructions in kernel mode
@@ -708,9 +745,9 @@ el0_sync_compat:
 	cmp	x24, #ESR_ELx_EC_UNKNOWN	// unknown exception in EL0
 	b.eq	el0_undef
 	cmp	x24, #ESR_ELx_EC_CP15_32	// CP15 MRC/MCR trap
-	b.eq	el0_cp15_32_compat
+	b.eq	el0_undef
 	cmp	x24, #ESR_ELx_EC_CP15_64	// CP15 MRRC/MCRR trap
-	b.eq	el0_cp15_64_compat
+	b.eq	el0_undef
 	cmp	x24, #ESR_ELx_EC_CP14_MR	// CP14 MRC/MCR trap
 	b.eq	el0_undef
 	cmp	x24, #ESR_ELx_EC_CP14_LS	// CP14 LDC/STC trap
@@ -728,28 +765,6 @@ el0_svc_compat:
 	mov	wscno, w7			// syscall number in w7 (r7)
 	mov     wsc_nr, #__NR_compat_syscalls
 	b	el0_svc_naked
-
-el0_cp15_32_compat:
-	/*
-	 * AArch32 CP15 MRC/MCR trap handling
-	 */
-	enable_dbg_and_irq
-	ct_user_exit
-	mov	x0, x25
-	mov	x1, sp
-	bl	do_cp15_32_instr_compat
-	b	ret_to_user
-
-el0_cp15_64_compat:
-	/*
-	 * AArch32 CP15 MRRC/MCRR trap handling
-	 */
-	enable_dbg_and_irq
-	ct_user_exit
-	mov	x0, x25
-	mov	x1, sp
-	bl	do_cp15_64_instr_compat
-	b	ret_to_user
 
 	.align	6
 el0_irq_compat:
@@ -946,7 +961,14 @@ el0_svc_naked:					// compat entry point
 	cmp     wscno, wsc_nr			// check upper syscall limit
 	b.hs	ni_sys
 	mask_nospec64 xscno, xsc_nr, x19	// enforce bounds for syscall number
+#ifdef VENDOR_EDIT
+//Ke.Li@ROM.Security, 2019-9-30, Add for prevent root check
+#ifdef CONFIG_OPPO_ROOT_CHECK
+	adr x16, oppo_root_check
+#else
 	ldr	x16, [stbl, xscno, lsl #3]	// address in the syscall table
+#endif /* CONFIG_OPPO_ROOT_CHECK */
+#endif /* VENDOR_EDIT */
 	blr	x16				// call sys_* routine
 	b	ret_fast_syscall
 ni_sys:
@@ -976,7 +998,14 @@ __sys_trace:
 	ldp	x2, x3, [sp, #S_X2]
 	ldp	x4, x5, [sp, #S_X4]
 	ldp	x6, x7, [sp, #S_X6]
+#ifdef VENDOR_EDIT
+//Ke.Li@ROM.Security, 2019-9-30, Add for prevent root check
+#ifdef CONFIG_OPPO_ROOT_CHECK
+	adr x16, oppo_root_check
+#else
 	ldr	x16, [stbl, xscno, lsl #3]	// address in the syscall table
+#endif /* CONFIG_OPPO_ROOT_CHECK */
+#endif /* VENDOR_EDIT */
 	blr	x16				// call sys_* routine
 
 __sys_trace_return:

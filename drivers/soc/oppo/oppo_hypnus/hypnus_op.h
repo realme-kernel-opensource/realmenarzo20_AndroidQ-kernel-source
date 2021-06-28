@@ -67,14 +67,12 @@ struct hypnus_chipset_operations {
 	int (*get_updown_migrate)(unsigned int *up_migrate,
 		unsigned int *down_migrate);
 	/* set up/down migrate */
-	int (*set_updown_migrate)(unsigned int *up_migrate,
-		unsigned int *down_migrate);
+	int (*set_updown_migrate)(unsigned int up_migrate,
+		unsigned int down_migrate);
 	/* set dsp frequency */
 	int (*set_dsp_freq_limit)(u32 core_id, u32 min, u32 max);
 	/* set npu frequency */
 	int (*set_npu_freq_limit)(u32 core_id, u32 min, u32 max);
-	/* set dynamic therm delta, ONLY FOR QCOM now */
-	int (*set_therm_delta)(int therm_delta);
 };
 
 void hypnus_chipset_op_init(struct hypnus_data *pdata);

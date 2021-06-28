@@ -163,35 +163,16 @@ ssize_t process_reclaim_write(struct file *file, const char __user *buffer,
 	return count;
 }
 
-#ifdef CONFIG_OPPO_SPECIAL_BUILD
-/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2019-07-08,
- * Only read reclaim info in agetest version
- */
-static int process_reclaim_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, reclaim_info_show, NULL);
-}
-#endif
-
 static struct file_operations process_reclaim_fops = {
-#ifdef CONFIG_OPPO_SPECIAL_BUILD
-	.open = process_reclaim_open,
-	.read = seq_read,
-#endif
 	.write	= process_reclaim_write,
 	.llseek	= noop_llseek,
 };
 
 static inline void process_reclaim_init_procfs(void)
 {
-#ifdef CONFIG_OPPO_SPECIAL_BUILD
-	if (!proc_create("process_reclaim", 0666, NULL,
-				&process_reclaim_fops))
-#else
 	if (!proc_create("process_reclaim", 0222, NULL,
 				&process_reclaim_fops))
-#endif
-	pr_err("Failed to register proc interface\n");
+		pr_err("Failed to register proc interface\n");
 }
 #else /* CONFIG_PROC_FS */
 static inline void process_reclaim_init_procfs(void)

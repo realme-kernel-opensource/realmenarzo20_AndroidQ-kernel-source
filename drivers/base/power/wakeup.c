@@ -18,68 +18,17 @@
 #include <linux/types.h>
 #include <trace/events/power.h>
 #ifdef VENDOR_EDIT
+//Yunqing.Zeng@BSP.Power.Basic 2017/11/09 add for wakelock profiler
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
+#include <linux/fb.h>
+#endif /* VENDOR_EDIT */
+#ifdef VENDOR_EDIT
 //Yanzhen.Feng@PSW.AD.OppoDebug.702252, 2016/06/21, Add for Sync App and Kernel time
 #include <linux/rtc.h>
 #endif /* VENDOR_EDIT */
-#include <linux/irq.h>
-#include <linux/interrupt.h>
-#include <linux/irqdesc.h>
 
 #include "power.h"
-
-#ifdef VENDOR_EDIT
-//Nanwei.Deng@BSP.Power.Basic, 2018/11/19, add for analysis power coumption.
-#include <linux/kobject.h>
-#include <linux/sysfs.h>
-#ifdef CONFIG_FB
-#include <linux/fb.h>
-#include <linux/notifier.h>
-#endif
-#ifdef CONFIG_DRM_MSM
-#include <linux/msm_drm_notify.h>
-#endif
-
-//#define WAKEUP_SOURCE_MODEM 					60	//qcom,glink-smem-native-xprt-modem
-//#define WAKEUP_SOURCE_MODEM_IPA					119 //ipa
-//#define WAKEUP_SOURCE_ADSP						61  //qcom,glink-smem-native-xprt-adsp
-//#define WAKEUP_SOURCE_CDSP						62	//qcom,glink-smem-native-xprt-cdsp
-
-#define WAKEUP_SOURCE_KPDPWR 						69	//qpnp_kpdpwr_status
-#define WAKEUP_SOURCE_PMIC_ALARM					595 //qpnp_rtc_alarm
-u64 wakeup_source_count_all = 0;
-u64 wakeup_source_count_kpdpwr = 0;
-u64 wakeup_source_count_cdsp= 0;
-u64 wakeup_source_count_adsp= 0;
-u64 alarm_count = 0;
-u64	wakeup_source_count_rtc = 0;
-u64	wakeup_source_count_pmic_rtc= 0;
-u64 wakeup_source_count_wifi = 0;
-
-
-#define MODEM_WAKEUP_SRC_NUM 3
-#define MODEM_DIAG_WS_INDEX 0
-#define MODEM_IPA_WS_INDEX 1
-#define MODEM_QMI_WS_INDEX 2
-
-u64	wakeup_source_count_modem= 0;
-
-int modem_wakeup_src_count[MODEM_WAKEUP_SRC_NUM] = { 0 };
-char modem_wakeup_src_string[MODEM_WAKEUP_SRC_NUM][10] =
-		{"DIAG_WS",
-		"IPA_WS",
-		"QMI_WS"};
-#endif /* VENDOR_EDIT */
-
-
-#ifdef VENDOR_EDIT
-//Yunqing.Zeng@BSP.Power.Basic 2017/11/28 add for kernel wakelock time statistics
-static atomic_t ws_all_release_flag = ATOMIC_INIT(1);
-static ktime_t ws_start_node;
-static ktime_t ws_end_node;
-static ktime_t ws_hold_all_time;
-static ktime_t reset_time;
-static spinlock_t statistics_lock;
-#endif /* VENDOR_EDIT */
 
 /*
  * If set, the suspend/hibernate code will abort transitions to a sleep state
@@ -99,6 +48,15 @@ static atomic_t pm_abort_suspend __read_mostly;
  * atomic variable to hold them both.
  */
 static atomic_t combined_event_count = ATOMIC_INIT(0);
+#ifdef VENDOR_EDIT
+//Yunqing.Zeng@BSP.Power.Basic 2017/11/28 add for kernel wakelock time statistics
+static atomic_t ws_all_release_flag = ATOMIC_INIT(1);
+static ktime_t ws_start_node;
+static ktime_t ws_end_node;
+static ktime_t ws_hold_all_time;
+static ktime_t reset_time;
+static spinlock_t statistics_lock;
+#endif /* VENDOR_EDIT */
 
 #define IN_PROGRESS_BITS	(sizeof(int) * 4)
 #define MAX_IN_PROGRESS		((1 << IN_PROGRESS_BITS) - 1)
@@ -751,12 +709,12 @@ static void wakeup_source_deactivate(struct wakeup_source *ws)
 		#ifdef VENDOR_EDIT
 		//Yunqing.Zeng@BSP.Power.Basic 2017/11/28 add for kernel wakelock time statistics
 		ktime_t ws_hold_delta = ktime_set(0, 0);
-		atomic_set(&ws_all_release_flag, 1);
 		spin_lock(&statistics_lock);
 		ws_end_node = ktime_get();
 		ws_hold_delta = ktime_sub(ws_end_node, ws_start_node);
 		ws_hold_all_time = ktime_add(ws_hold_all_time, ws_hold_delta);
 		spin_unlock(&statistics_lock);
+		atomic_set(&ws_all_release_flag, 1);
 		#endif /* VENDOR_EDIT */
 		wake_up(&wakeup_count_wait_queue);
 	}
@@ -898,9 +856,8 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 	struct wakeup_source *ws, *last_active_ws = NULL;
 	int len = 0;
 	bool active = false;
-	int srcuidx;
 
-	srcuidx = srcu_read_lock(&wakeup_srcu);
+	rcu_read_lock();
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active && len < max) {
 			if (!active)
@@ -921,53 +878,21 @@ void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
 				"Last active Wakeup Source: %s",
 				last_active_ws->name);
 	}
-	srcu_read_unlock(&wakeup_srcu, srcuidx);
+	rcu_read_unlock();
 }
 EXPORT_SYMBOL_GPL(pm_get_active_wakeup_sources);
-
-/* OPPO 2013-09-17 wangjc Add begin for print wakeup source */
-#ifdef VENDOR_EDIT
+/*Dabin.Bai@ODM_WT.BSP.BOOT 2020/7/16, modify log print level*/
 void pm_print_active_wakeup_sources(void)
-#else
-static void pm_print_active_wakeup_sources(void)
-#endif
 {
 	struct wakeup_source *ws;
 	int srcuidx, active = 0;
 	struct wakeup_source *last_activity_ws = NULL;
-	#ifdef VENDOR_EDIT
-    //Yongyao.Song@PSW.NW.PWR.919039, 2018/11/19, add for analysis power coumption.
-    //add for modem wake up source
-	int i = 0;
-	#endif
 
 	srcuidx = srcu_read_lock(&wakeup_srcu);
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
-		    #ifdef VENDOR_EDIT
-            //Yongyao.Song@PSW.NW.PWR.919039,2018/11/19, add for analysis power coumption.
-            //add for modem wake up source
 			pr_info("active wakeup source: %s\n", ws->name);
-			#else
-			pr_debug("active wakeup source: %s\n", ws->name);
-			#endif
-
 			active = 1;
-
-            #ifdef VENDOR_EDIT
-            //Yongyao.Song@PSW.NW.PWR.919039, 2018/11/19, add for analysis power coumption.
-            //add for modem wake up source
-            for(i = 0; i < MODEM_WAKEUP_SRC_NUM - 1; i++)
-            {
-                if (strcmp(modem_wakeup_src_string[i], ws->name) == 0)
-                {
-                    modem_wakeup_src_count[i]++;
-                    if(i == MODEM_IPA_WS_INDEX){
-                        wakeup_source_count_modem++;
-                    }
-                }
-            }
-            #endif
 		} else if (!active &&
 			   (!last_activity_ws ||
 			    ktime_to_ns(ws->last_time) >
@@ -976,34 +901,13 @@ static void pm_print_active_wakeup_sources(void)
 		}
 	}
 
-    #ifndef VENDOR_EDIT
-    //Yongyao.Song@PSW.NW.PWR.919039, 2018/11/19, add for analysis power coumption.
-    //modify for modem wake up source
-    /*
 	if (!active && last_activity_ws)
-		pr_debug("last active wakeup source: %s\n",
-			last_activity_ws->name);
-    */
-    #else
-	if (!active && last_activity_ws){
 		pr_info("last active wakeup source: %s\n",
 			last_activity_ws->name);
-		for(i = 0; i < MODEM_WAKEUP_SRC_NUM - 1; i++)
-		{
-			if (strcmp(modem_wakeup_src_string[i], last_activity_ws->name) == 0)
-			{
-			    modem_wakeup_src_count[i]++;
-                if(i == MODEM_IPA_WS_INDEX){
-                    wakeup_source_count_modem++;
-                }
-			}
-		}
-	}
-    #endif
 	srcu_read_unlock(&wakeup_srcu, srcuidx);
 }
 EXPORT_SYMBOL_GPL(pm_print_active_wakeup_sources);
-
+/*Dabin.Bai@ODM_WT.BSP.BOOT 2020/7/16, modify log print level*/
 /**
  * pm_wakeup_pending - Check if power transition in progress should be aborted.
  *
@@ -1016,7 +920,9 @@ bool pm_wakeup_pending(void)
 {
 	unsigned long flags;
 	bool ret = false;
-
+#ifdef VENDOR_EDIT //YouLi@BSP.Kernel.Stability for maybe pm_abort_suspend happend here
+	int counter;
+#endif
 	spin_lock_irqsave(&events_lock, flags);
 	if (events_check_enabled) {
 		unsigned int cnt, inpr;
@@ -1027,17 +933,21 @@ bool pm_wakeup_pending(void)
 	}
 	spin_unlock_irqrestore(&events_lock, flags);
 
-#ifndef VENDOR_EDIT
-/*Ji.Xu@BSP.Power.Basic 2019/04/03 modify for maybe pm_abort_suspend happend here*/
+#ifndef VENDOR_EDIT //yixue.ge@bsp.drv modify for maybe pm_abort_suspend happend here
 	if (ret) {
 #else
-	if (ret || atomic_read(&pm_abort_suspend)) {
+	counter = atomic_read(&pm_abort_suspend);
+	if (ret || counter) {
 #endif
 		pr_info("PM: Wakeup pending, aborting suspend\n");
 		pm_print_active_wakeup_sources();
 	}
 
+#ifdef VENDOR_EDIT //YouLi@BSP.Kernel.Stability for maybe pm_abort_suspend happend here
+	return ret || counter;
+#else
 	return ret || atomic_read(&pm_abort_suspend) > 0;
+#endif
 }
 
 void pm_system_wakeup(void)
@@ -1061,29 +971,7 @@ void pm_wakeup_clear(bool reset)
 
 void pm_system_irq_wakeup(unsigned int irq_number)
 {
-	struct irq_desc *desc;
-	const char *name = "null";
-
 	if (pm_wakeup_irq == 0) {
-		if (msm_show_resume_irq_mask) {
-			desc = irq_to_desc(irq_number);
-			if (desc == NULL)
-				name = "stray irq";
-			else if (desc->action && desc->action->name)
-				name = desc->action->name;
-
-			pr_warn("%s: %d triggered %s\n", __func__,
-					irq_number, name);
-            #ifdef VENDOR_EDIT
-            //Nanwei.Deng@BSP.Power.Basic, 2018/04/28, add for analysis power coumption.
-			if(irq_number == WAKEUP_SOURCE_KPDPWR) {
-                wakeup_source_count_kpdpwr++;
-            }
-			if(irq_number == WAKEUP_SOURCE_PMIC_ALARM) {
-                wakeup_source_count_pmic_rtc++;
-            }
-			#endif
-		}
 		pm_wakeup_irq = irq_number;
 		pm_system_wakeup();
 	}
@@ -1114,7 +1002,12 @@ bool pm_get_wakeup_count(unsigned int *count, bool block)
 			split_counters(&cnt, &inpr);
 			if (inpr == 0 || signal_pending(current))
 				break;
+
+			#ifdef VENDOR_EDIT
+			/* ChaoYing.Chen@BSP.Power.Basic, 2017/12/9, Add for print wakeup source */
 			pm_print_active_wakeup_sources();
+			#endif /* VENDOR_EDIT */
+
 			schedule();
 		}
 		finish_wait(&wakeup_count_wait_queue, &wait);
@@ -1381,7 +1274,7 @@ static void active_max_reset(void)
 	ktime_t total_time;
 	struct wakeup_source *ws;
 
-	pr_info("%s\n", __func__);
+	printk("%s\n", __func__);
 	active_max_reset_time = ktime_get();
 	srcuidx = srcu_read_lock(&wakeup_srcu);
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
@@ -1403,8 +1296,10 @@ static ssize_t active_max_store(struct kobject *kobj, struct kobj_attribute *att
 {
 	char reset_string[]="reset";
 
-	if(strlen(reset_string) != (count-1))
-		return count;
+#ifdef VENDOR_EDIT
+/* Ji.Xu@SW.BSP.CHG, 2018-11-29 modify framework ioctl fail */
+	if(!((count == strlen(reset_string)) || ((count == strlen(reset_string) + 1) && (buf[count-1] == '\n'))))
+#endif /*VENDOR_EDIT*/
 
 	if (strncmp(buf, reset_string, strlen(reset_string)) != 0)
 		return count;
@@ -1470,8 +1365,10 @@ static ssize_t kernel_time_store(struct kobject *kobj, struct kobj_attribute *at
 {
 	char reset_string[]="reset";
 
+#ifdef VENDOR_EDIT
+/* Ji.Xu@SW.BSP.CHG, 2018-11-29 modify framework ioctl fail */
 	if(!((count == strlen(reset_string)) || ((count == strlen(reset_string) + 1) && (buf[count-1] == '\n'))))
-                return count;
+#endif /*VENDOR_EDIT*/
 
 	if (strncmp(buf, reset_string, strlen(reset_string)) != 0)
 		return count;
@@ -1520,42 +1417,23 @@ static ssize_t kernel_time_show(struct kobject *kobj, struct kobj_attribute *att
 static int ws_fb_notify_callback(struct notifier_block *nb, unsigned long val, void *data)
 {
 	struct fb_event *evdata = data;
-	int *blank;
+	unsigned int blank;
 
-#ifdef CONFIG_DRM_MSM
-	if(val != MSM_DRM_EARLY_EVENT_BLANK && val != MSM_DRM_EVENT_BLANK)
-#else
-	if (val != FB_EVENT_BLANK && val != FB_EARLY_EVENT_BLANK)
-#endif
-	return 0;
+	if (val != FB_EVENT_BLANK)
+		return 0;
 
-	if(evdata && evdata->data) {
-		blank = evdata->data;
-		pr_info(KERN_INFO  "%s, val=%ld, blank=%d\n", __func__,val,*blank);
-		#ifdef CONFIG_DRM_MSM
-		if (*blank == MSM_DRM_BLANK_POWERDOWN) { //suspend
-			if (val == MSM_DRM_EARLY_EVENT_BLANK) {    //early event
-		#else
-		if (*blank == FB_BLANK_POWERDOWN) { //suspend
-			if (val == FB_EARLY_EVENT_BLANK) {    //early event
-		#endif
-				#ifdef VENDOR_EDIT
-				//Nanwei.Deng@BSP.Power.Basic, , 2016/07/19, add for analysis power consumption,clear wakeup source stastatics action according to framework
-				//kernel_time_reset();
-				//active_max_reset();
-				#endif
-				pr_info(KERN_INFO  "%s, POWERDOWN\n", __func__);
-			}
-		}
-		#ifdef CONFIG_DRM_MSM
-		else if (*blank == MSM_DRM_BLANK_UNBLANK) { //resume
-			if (val == MSM_DRM_EVENT_BLANK) {    //event
-		#else
-		else if (*blank == FB_BLANK_UNBLANK) { //resume
-			if (val == FB_EVENT_BLANK) {    //event
-		#endif
-				pr_info(KERN_INFO  "%s, UNBLANK\n", __func__);
-			}
+	if (evdata && evdata->data && val == FB_EVENT_BLANK) {
+		blank = *(int *) (evdata->data);
+		switch (blank) {
+		case FB_BLANK_POWERDOWN: //screen off		
+		//wenxian.Zhen@PSW.BSP.POWER, 2019/01/15, removing for analysis power consumption,clear wakeup source stastatics action according to framework
+//			kernel_time_reset();
+//			active_max_reset();
+			break;
+		case FB_BLANK_UNBLANK:   //screen on
+			break;
+		default:
+			break;
 		}
 	}
 	return NOTIFY_OK;
@@ -1587,28 +1465,20 @@ static int __init wakelock_profiler_init(void)
 	active_max_reset_time = ktime_set(0, 0);
 	wakelock_profiler = kobject_create_and_add("wakelock_profiler", kernel_kobj);
 	if (!wakelock_profiler) {
-		pr_info(KERN_WARNING "[%s] failed to create a sysfs kobject\n",
+		printk(KERN_WARNING "[%s] failed to create a sysfs kobject\n",
 				__func__);
 		return 1;
 	}
 	retval = sysfs_create_group(wakelock_profiler, &attr_group);
 	if (retval) {
 		kobject_put(wakelock_profiler);
-		pr_info(KERN_WARNING "[%s] failed to create a sysfs group %d\n",
+		printk(KERN_WARNING "[%s] failed to create a sysfs group %d\n",
 				__func__, retval);
 	}
-#if defined(CONFIG_DRM_MSM)
-	retval = msm_drm_register_client(&ws_fb_notify_block);
-	if (retval) {
-		pr_info("%s error: register notifier failed,drm!\n", __func__);
-	}
-#elif defined(CONFIG_FB)
 	retval = fb_register_client(&ws_fb_notify_block);
 	if (retval) {
-		pr_info("%s error: register notifier failed!\n", __func__);
+		printk("%s error: register notifier failed!\n", __func__);
 	}
-#endif
-
 	return 0;
 }
 #endif /* VENDOR_EDIT */

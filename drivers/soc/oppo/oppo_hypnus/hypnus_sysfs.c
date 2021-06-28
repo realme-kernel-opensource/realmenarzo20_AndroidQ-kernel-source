@@ -122,4 +122,3 @@ void hypnus_sysfs_remove(struct hypnus_data *pdata)
 {
 	kobject_put(&pdata->kobj);
 }
-

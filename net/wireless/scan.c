@@ -78,7 +78,6 @@ MODULE_PARM_DESC(bss_entries_limit,
 #else
 #define IEEE80211_SCAN_RESULT_EXPIRE	(30 * HZ)
 #endif  /*VENDOR_EDIT*/
-
 static void bss_free(struct cfg80211_internal_bss *bss)
 {
 	struct cfg80211_bss_ies *ies;
@@ -987,9 +986,6 @@ cfg80211_bss_update(struct cfg80211_registered_device *rdev,
 		found->ts = tmp->ts;
 		found->ts_boottime = tmp->ts_boottime;
 		found->parent_tsf = tmp->parent_tsf;
-		found->pub.chains = tmp->pub.chains;
-		memcpy(found->pub.chain_signal, tmp->pub.chain_signal,
-		       IEEE80211_MAX_CHAINS);
 		ether_addr_copy(found->parent_bssid, tmp->parent_bssid);
 	} else {
 		struct cfg80211_internal_bss *new;
@@ -1282,8 +1278,6 @@ cfg80211_inform_bss_frame_data(struct wiphy *wiphy,
 	tmp.pub.capability = le16_to_cpu(mgmt->u.probe_resp.capab_info);
 	tmp.ts_boottime = data->boottime_ns;
 	tmp.parent_tsf = data->parent_tsf;
-	tmp.pub.chains = data->chains;
-	memcpy(tmp.pub.chain_signal, data->chain_signal, IEEE80211_MAX_CHAINS);
 	ether_addr_copy(tmp.parent_bssid, data->parent_bssid);
 
 	signal_valid = abs(data->chan->center_freq - channel->center_freq) <=

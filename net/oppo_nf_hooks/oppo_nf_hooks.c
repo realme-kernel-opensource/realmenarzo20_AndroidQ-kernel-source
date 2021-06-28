@@ -127,11 +127,10 @@ static int oppo_nf_hooks_send_to_user(int msg_type, char *payload, int payload_l
 	if(oppo_nf_hooks_pid){
 		ret = netlink_unicast(oppo_nf_hooks_sock, skbuff, oppo_nf_hooks_pid, MSG_DONTWAIT);
 	} else {
-		printk(KERN_ERR "oppo_nf_hooks_netlink: can not unicast skbuff, oppo_nf_hooks_pid=0\n");
-		kfree_skb(skbuff);
+	    printk(KERN_ERR "oppo_nf_hooks_netlink: can not unicast skbuff, oppo_nf_hooks_pid=0\n");
 	}
 	if(ret < 0){
-		printk(KERN_ERR "oppo_nf_hooks_netlink: can not unicast skbuff,ret = %d\n", ret);
+		printk(KERN_ERR "oppo_nf_hooks_netlink: can not unicast skbuff,ret = %d\n",ret);
 		return 1;
 	}
 
@@ -215,13 +214,12 @@ static unsigned int oppo_nf_hooks_lm_detect(void *priv,
     if (is_wechat_skb(ct, skb)) {
     	if((iph = ip_hdr(skb)) != NULL && iph->protocol == IPPROTO_TCP){
     	    tot_len = ntohs(iph->tot_len);
-    		//tcph = (struct tcphdr *)(skb->data + iph->ihl * 4 );//tcp_hdr(skb)(u8 *);
     		tcph = tcp_hdr(skb);
     		header_len = iph->ihl * 4 + tcph->doff * 4;
-    		if (unlikely(skb_linearize(skb))) {
-    		    return NF_ACCEPT;
-    		}
-    		payload = (u8 *)(skb->data + header_len);
+            if (unlikely(skb_linearize(skb))) {
+                return NF_ACCEPT;
+            }
+    		payload =(u8 *)(skb->data + header_len);
     	    for (i = 0; i < wechat_param_count; i++) {
     		    if (tot_len >= wechat_infos[i].min_tot_len && tot_len <= wechat_infos[i].max_tot_len) {
     		        if (memcmp(payload + wechat_infos[i].offset, wechat_infos[i].fixed_value, wechat_infos[i].len) == 0) {
@@ -248,6 +246,8 @@ static struct nf_hook_ops oppo_nf_hooks_ops[] __read_mostly = {
 		.hooknum	= NF_INET_LOCAL_IN,
 		.priority	= NF_IP_PRI_FILTER + 1,
 	},
+
+	{ }
 };
 
 static struct ctl_table oppo_nf_hooks_sysctl_table[] = {

@@ -161,6 +161,12 @@ long hypnus_ioctl_submit_lpm(struct hypnus_data *pdata,
 	return 0;
 }
 
+int hypnus_ioclt_submit_ddr(struct hypnus_data *pdata, u32 type)
+{
+	/* Todo */
+	return 0;
+}
+
 int hypnus_ioclt_submit_thermal_policy(struct hypnus_data *pdata)
 {
 	/* Todo */
@@ -203,7 +209,7 @@ long hypnus_ioctl_get_migration(struct hypnus_data *pdata,
 	struct hypnus_migration_prop *prop = data;
 	int *up, *down;
 
-	if (!pdata->cops->set_updown_migrate)
+	if (!pdata->cops->get_updown_migrate)
 		return -ENOTSUPP;
 
 	up = prop->up_migrate;
@@ -221,13 +227,13 @@ long hypnus_ioctl_submit_migration(struct hypnus_data *pdata,
 {
 	int ret;
 	struct hypnus_migration_prop *prop = data;
-	int *up, *down;
+	int up, down;
 
 	if (!pdata->cops->set_updown_migrate)
 		return -ENOTSUPP;
 
-	up = prop->up_migrate;
-	down = prop->down_migrate;
+	up = prop->up_migrate[0];
+	down = prop->down_migrate[0];
 
 	ret = pdata->cops->set_updown_migrate(up, down);
 	if (ret)
@@ -263,6 +269,30 @@ cpu_available_count(struct cpumask *cluster_mask)
 	cpumask_andnot(&mask, &mask, cpu_isolated_mask);
 
 	return cpumask_weight(&mask);
+}
+
+static int hypnus_unisolate_cpu(struct hypnus_data *pdata, unsigned int cpu)
+{
+	int ret = 0;
+
+	if (cpu_isolated(cpu) && !pdata->cpu_data[cpu].not_preferred) {
+		ret = pdata->cops->unisolate_cpu(cpu);
+		if (ret)
+			pr_err("Unisolate CPU%u failed! err %d\n", cpu, ret);
+	}
+
+	return ret;
+}
+
+static int hypnus_isolate_cpu(struct hypnus_data *pdata, unsigned int cpu)
+{
+	int ret;
+
+	ret = pdata->cops->isolate_cpu(cpu);
+	if (ret)
+		pr_err("Isolate CPU%u failed! err %d\n", cpu, ret);
+
+	return ret;
 }
 
 long hypnus_ioctl_submit_cpunr(struct hypnus_data *pdata,
@@ -377,18 +407,6 @@ long hypnus_ioctl_set_fpsgo(struct hypnus_data *pdata, unsigned int cmd, void *d
 	return pdata->cops->set_fpsgo_engine(enable);
 }
 
-long hypnus_ioctl_set_therm_delta(struct hypnus_data *pdata,
-					unsigned int cmd, void *data)
-{
-	int *val = (int *)data;
-	int therm_delta = *val;
-
-	if (!pdata->cops->set_therm_delta)
-		return -ENOTSUPP;
-
-	return pdata->cops->set_therm_delta(therm_delta);
-}
-
 static int hypnus_parse_cpu_topology(struct hypnus_data *pdata)
 {
 	struct list_head *head = get_cpufreq_policy_list();
@@ -416,19 +434,19 @@ static int hypnus_parse_cpu_topology(struct hypnus_data *pdata)
 		}
 
 		index = topology_physical_package_id(first_cpu);
-		pr_info("cluster idx = %d, cpumask = 0x%x\n", index,
+		pr_err("cluster idx = %d, cpumask = 0x%x\n", index,
 				(int)cpumask_bits(policy->related_cpus)[0]);
 		pdata->cluster_data[index].id = index;
 		cpumask_copy(&pdata->cluster_data[index].cluster_mask,
 				policy->related_cpus);
 		pdata->cluster_data[index].cpufreq_min = policy->cpuinfo.min_freq;
 		pdata->cluster_data[index].cpufreq_max = policy->cpuinfo.max_freq;
-		pr_info("min freq: %u, max freq: %u\n", pdata->cluster_data[index].cpufreq_min,
+		pr_err("min freq: %u, max freq: %u\n", pdata->cluster_data[index].cpufreq_min,
 					pdata->cluster_data[index].cpufreq_max);
 		cluster_nr++;
 	}
 	pdata->cluster_nr = cluster_nr;
-	pr_info("Totally %d clusters\n", pdata->cluster_nr);
+	pr_err("Totally %d clusters\n", pdata->cluster_nr);
 	return 0;
 }
 
@@ -473,11 +491,8 @@ struct hypnus_data *hypnus_get_hypdata(void)
 int __init gpu_info_init(struct hypnus_data *pdata)
 {
 	pdata->gpu_nr = 1;
-
-	if (!pdata->cops->gpu_info_init)
-		return 0;
-
-	pdata->cops->gpu_info_init(pdata);
+	if (pdata->cops->gpu_info_init)
+		pdata->cops->gpu_info_init(pdata);
 	return 0;
 }
 

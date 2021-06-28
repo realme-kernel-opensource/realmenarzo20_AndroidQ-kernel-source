@@ -84,7 +84,7 @@
 #include "../../touchpanel_common.h"
 #include <soc/oppo/oppo_project.h>
 
-#define DRIVER_VERSION            "2.4.0.0"
+#define DRIVER_VERSION            "2.3.0.0"
 
 /* Options */
 #define TDDI_INTERFACE            BUS_SPI /* BUS_I2C(0x18) or BUS_SPI(0x1C) */
@@ -94,7 +94,6 @@
 #define SPI_RETRY                 5
 #define WQ_ESD_DELAY              2000
 #define WQ_BAT_DELAY              2000
-#define MP_TMEOUT                 3000
 #define MT_B_TYPE                 ENABLE
 #define TDDI_RST_BIND             DISABLE
 #define MT_PRESSURE               DISABLE
@@ -104,12 +103,6 @@
 #define REGULATOR_POWER           DISABLE
 #define TP_SUSPEND_PRIO           ENABLE
 #define DEBUG_OUTPUT              1 /* DEBUG_ALL or DEBUG_NONE */
-
-
-
-
-// These is define for time
-#define RST_EDGE_DELAY              5  // 5ms
 
 /* Plaform compatibility */
 // #define CONFIG_PLAT_SPRD
@@ -170,13 +163,6 @@ enum TP_RST_METHOD {
     TP_HW_RST_ONLY,
 };
 
-#if (TDDI_RST_BIND)
-#define ILITEK_RESET_METHOD TP_IC_WHOLE_RST
-#else
-#define ILITEK_RESET_METHOD TP_HW_RST_ONLY
-#endif
-
-
 enum TP_FW_UPGRADE_TYPE {
     UPGRADE_FLASH = 0,
     UPGRADE_IRAM
@@ -191,8 +177,6 @@ enum TP_FW_OPEN_METHOD {
     REQUEST_FIRMWARE = 0,
     FILP_OPEN
 };
-#define IITEK_FW_OPEN FILP_OPEN
-
 
 enum TP_SLEEP_STATUS {
     TP_SUSPEND = 0,
@@ -247,7 +231,6 @@ enum ili_model_id {
 #define TPD_WIDTH                     2048
 
 /* Firmware upgrade */
-#define MAX_FW_BUF_SIZE                    (128*K)
 #define MAX_HEX_FILE_SIZE                  (256*K)
 #define MAX_FLASH_FIRMWARE_SIZE            (256*K)
 #define MAX_IRAM_FIRMWARE_SIZE             (60*K)
@@ -267,9 +250,6 @@ enum ili_model_id {
 #define SPI_UPGRADE_LEN                    2048
 #define SPI_READ_LEN                       2048
 #define FW_BLOCK_INFO_NUM                  7
-#define TIMING_INFO_STR_SIZE               (256)
-#define TIMING_INFO_INFO_SIZE              (64)
-
 
 /* The example for the gesture virtual keys */
 #define GESTURE_DOUBLECLICK                0x58
@@ -375,7 +355,6 @@ enum ili_model_id {
 #define RAWDATA_NO_BK_SHIFT_9881F    4096
 #define DEBUG_DATA_SAVE_MAX_FRAME    1024
 #define DEBUG_DATA_MAX_LENGTH        2048
-#define DEBUG_MESSAGE_MAX_LENGTH     (4096)
 
 struct ilitek_tddi_dev {
     struct spi_device *spi;
@@ -406,6 +385,7 @@ struct ilitek_tddi_dev {
 
     int fw_retry;
     int fw_update_stat;
+    int fw_open;
     bool wq_esd_ctrl;
     bool wq_bat_ctrl;
 
@@ -425,7 +405,9 @@ struct ilitek_tddi_dev {
     int bg_count;
 
     int reset;
-    //int fw_upgrade_mode;
+    int rst_edge_delay;
+    int fw_upgrade_mode;
+    bool wtd_ctrl;
     bool do_otp_check;
 
     atomic_t irq_stat;
@@ -441,12 +423,13 @@ struct ilitek_tddi_dev {
     int (*write)(void *data, int len);
     int (*read)(void *data, int len);
     int (*spi_write_then_read)(struct spi_device *spi, const void *txbuf, unsigned n_tx, void *rxbuf, unsigned n_rx);
-    //int (*gesture_move_code)(int mode);
-    //int (*esd_check)(void);
-    //void (*spi_speed)(bool enable);
-    //void (*ges_recover)(void);
-    //int (*spi_check_read_size)(void);
-    //int (*spi_read_after_check_size)(uint8_t *data, int size);
+    int (*mp_move_code)(void);
+    int (*gesture_move_code)(int mode);
+    int (*esd_check)(void);
+    void (*spi_speed)(bool enable);
+    void (*ges_recover)(void);
+    int (*spi_check_read_size)(void);
+    int (*spi_read_after_check_size)(uint8_t *data, int size);
     void (*demo_debug_info[5])(u8 *, int);
 
     struct touchpanel_data *ts;
@@ -471,8 +454,6 @@ struct ilitek_tddi_dev {
     bool get_ic_info_flag;
     bool already_reset;
     u8 *fw_buf_dma;
-    bool need_judge_irq_throw;
-    bool irq_wake_up_state;
 #ifdef CONFIG_OPPO_TP_APK
     bool plug_status;
     bool lock_point_status;
@@ -523,6 +504,7 @@ struct ilitek_ic_info {
     u32 reset_key;
     u16 wtd_key;
     int no_bk_shift;
+    bool spi_speed_ctrl;
     s32 (*open_sp_formula)(int dac, int raw);
     s32 (*open_c_formula)(int dac, int raw, int tvch, int gain);
     void (*hd_dma_check_crc_off)(void);
@@ -536,98 +518,112 @@ struct record_state {
 };
 
 struct demo_debug_info_id0 {
-    u32 id                  : 8;
-    u32 sys_powr_state_e    : 3;
-    u32 sys_state_e         : 3;
-    u32 tp_state_e          : 2;
+    u8 id;
+    u8 app_sys_powr_state_e : 3;
+    u8 app_sys_state_e : 3;
+    u8 tp_state_e : 2;
 
-    u32 touch_palm_state    : 2;
-    u32 app_an_statu_e      : 3;
-    u32 app_sys_bg_err      : 1;
-    u32 g_b_wrong_bg        : 1;
-    u32 reserved0           : 1;
+    u8 touch_palm_state_e : 2;
+    u8 app_an_statu_e : 3;
+    u8 app_sys_check_bg_abnormal : 1;
+    u8 g_b_wrong_bg: 1;
+    u8 reserved0 : 1;
 
-    u32 normal_mode         : 1;
-    u32 charger_mode        : 1;
-    u32 glove_mode          : 1;
-    u32 stylus_mode         : 1;
-    u32 multi_mode          : 1;
-    u32 noise_mode          : 1;
-    u32 palm_plus_mode      : 1;
-    u32 floating_mode       : 1;
+    u8 status_of_dynamic_th_e : 4;
+    u8 reserved1 : 4;
 
-    u32 algo_pt_status0     : 3;
-    u32 algo_pt_status1     : 3;
-    u32 algo_pt_status2     : 3;
-    u32 algo_pt_status3     : 3;
-    u32 algo_pt_status4     : 3;
-    u32 algo_pt_status5     : 3;
-    u32 algo_pt_status6     : 3;
-    u32 algo_pt_status7     : 3;
-    u32 algo_pt_status8     : 3;
-    u32 algo_pt_status9     : 3;
-    u32 reserved2           : 2;
+    u32 algo_pt_status0 : 3;
+    u32 algo_pt_status1 : 3;
+    u32 algo_pt_status2 : 3;
+    u32 algo_pt_status3 : 3;
+    u32 algo_pt_status4 : 3;
+    u32 algo_pt_status5 : 3;
+    u32 algo_pt_status6 : 3;
+    u32 algo_pt_status7 : 3;
+    u32 algo_pt_status8 : 3;
+    u32 algo_pt_status9 : 3;
+    u32 reserved2       : 2;
+    u32 hopping_flg     : 1;
+    u32 hopping_index   : 5;
+    u32 frequency_h     : 2;
+    u32 frequency_l     : 8;
 
-    u32 hopping_flg         : 1;
-    u32 hopping_index       : 5;
-    u32 frequency_h         : 2;
-    u32 frequency_l         : 8;
-    u32 reserved3           : 8;
-    u32 reserved4           : 8;
+    u8 reserved3;
+    u8 reserved4;
 };
 
 extern s32 ipio_debug_level;
 extern struct ilitek_tddi_dev *idev;
 
 /* Prototypes for tddi firmware/flash functions */
-void ilitek_tddi_ic_check_otp_prog_mode(void);
-int ilitek_tddi_fw_dump_iram_data(u32 start, u32 end);
-int ilitek_tddi_fw_upgrade(void);
+extern void ilitek_tddi_ic_check_otp_prog_mode(void);
+extern int ilitek_tddi_fw_dump_iram_data(u32 start, u32 end);
+extern int ilitek_tddi_fw_upgrade(int upgrade_type, int file_type, int open_file_method);
 
 /* Prototypes for tddi mp test */
-int ilitek_tddi_mp_test_main(char *apk, struct seq_file *s, char *message, bool lcm_on);
+extern int ilitek_tddi_mp_test_main(char *apk, struct seq_file *s, char *message, bool lcm_on);
 
 /* Prototypes for tddi core functions */
-int ilitek_tddi_ic_watch_dog_ctrl(bool write, bool enable);
-void ilitek_tddi_ic_set_ddi_reg_onepage(u8 page, u8 reg, u8 data);
-void ilitek_tddi_ic_get_ddi_reg_onepage(u8 page, u8 reg);
-int ilitek_tddi_ic_whole_reset(void);
-int ilitek_tddi_ic_code_reset(void);
-int ilitek_tddi_ic_func_ctrl(const char *name, int ctrl);
-u32 ilitek_tddi_ic_get_pc_counter(void);
-int ilitek_tddi_ic_check_busy(int count, int delay);
-int ilitek_tddi_ic_get_panel_info(void);
-int ilitek_tddi_ic_get_tp_info(void);
-int ilitek_tddi_ic_get_core_ver(void);
-int ilitek_tddi_ic_get_protocl_ver(void);
-int ilitek_tddi_ic_get_fw_ver(void);
-int ilitek_tddi_ic_get_info(void);
-int ilitek_ice_mode_write(u32 addr, u32 data, int len);
-int ilitek_ice_mode_read(u32 addr, u32 *data, int len);
-int ilitek_ice_mode_ctrl(bool enable, bool mcu);
-void ilitek_tddi_ic_init(void);
-int ilitek_tddi_edge_palm_ctrl(u8 type);
+extern void ilitek_tddi_touch_esd_gesture_iram(void);
+extern int ilitek_tddi_move_gesture_code_iram(int mode);
+extern int ilitek_tddi_move_mp_code_iram(void);
+extern void ilitek_tddi_report_ap_mode(u8 *buf, int len);
+extern void ilitek_tddi_report_debug_mode(u8 *buf, int rlen);
+extern void ilitek_tddi_report_gesture_mode(u8 *buf, int rlen);
+extern void ilitek_tddi_report_i2cuart_mode(u8 *buf, int rlen);
+extern int ilitek_tddi_ic_watch_dog_ctrl(bool write, bool enable);
+extern void ilitek_tddi_ic_set_ddi_reg_onepage(u8 page, u8 reg, u8 data);
+extern void ilitek_tddi_ic_get_ddi_reg_onepage(u8 page, u8 reg);
+extern void ilitek_tddi_ic_spi_speed_ctrl(bool enable);
+extern int ilitek_tddi_ic_whole_reset(void);
+extern int ilitek_tddi_ic_code_reset(void);
+extern int ilitek_tddi_ic_func_ctrl(const char *name, int ctrl);
+extern u32 ilitek_tddi_ic_get_pc_counter(void);
+extern int ilitek_tddi_ic_check_int_stat(void);
+extern int ilitek_tddi_ic_check_busy(int count, int delay);
+extern int ilitek_tddi_ic_get_panel_info(void);
+extern int ilitek_tddi_ic_get_tp_info(void);
+extern int ilitek_tddi_ic_get_core_ver(void);
+extern int ilitek_tddi_ic_get_protocl_ver(void);
+extern int ilitek_tddi_ic_get_fw_ver(void);
+extern int ilitek_tddi_ic_get_info(void);
+extern int ilitek_ice_mode_bit_mask_write(u32 addr, u32 mask, u32 value);
+extern int ilitek_ice_mode_write(u32 addr, u32 data, int len);
+extern int ilitek_ice_mode_read(u32 addr, u32 *data, int len);
+extern int ilitek_ice_mode_ctrl(bool enable, bool mcu);
+extern void ilitek_tddi_ic_init(void);
+extern int ilitek_tddi_edge_palm_ctrl(u8 type);
 
 /* Prototypes for tddi events */
-int ilitek_tddi_switch_mode(u8 *data);
-void ilitek_tddi_wq_ges_recover(void);
-int ilitek_tddi_mp_test_handler(char *apk, struct seq_file *s, char *message, bool lcm_on);
-int ilitek_tddi_reset_ctrl(enum TP_RST_METHOD mode);
+extern int ilitek_tddi_switch_mode(u8 *data);
+extern int ilitek_tddi_wq_esd_i2c_check(void);
+extern int ilitek_tddi_wq_esd_spi_check(void);
+extern void ilitek_tddi_wq_ges_recover(void);
+extern int ilitek_tddi_mp_test_handler(char *apk, struct seq_file *s, char *message, bool lcm_on);
+extern int ilitek_tddi_report_handler(void);
+extern int ilitek_tddi_sleep_handler(int mode);
+extern void ilitek_tddi_wq_esd_check(void);
+extern int ilitek_tddi_reset_ctrl(int mode);
 
+/* Prototypes for platform level */
+extern void ilitek_plat_irq_disable(void);
+extern void ilitek_plat_irq_enable(void);
+extern void ilitek_plat_tp_reset(void);
 
 /* Prototypes for demo_debug_info_mode */
-void ilitek_set_gesture_fail_reason(bool enable);
-int ilitek_tddi_get_tp_recore_ctrl(int data);
+extern void ilitek_tddi_demo_debug_info_id0(u8 *buf, int len);
+extern int ilitek_tddi_get_tp_recore(int data);
+extern void ilitek_set_gesture_fail_reason(bool enable);
+extern int ilitek_tddi_get_tp_recore_ctrl(int data);
+extern void ilitek_tddi_demo_debug_info_mode(u8 *buf, int len);
 
 /* Prototypes for miscs */
-int ilitek_create_proc_for_oppo(struct touchpanel_data *ts);
-void ilitek_tddi_node_init(void);
-void ilitek_dump_data(void *data, int type, int len, int row_len, const char *name);
-void netlink_reply_msg(void *raw, int size);
-int katoi(char *str);
-
-bool ilitek_check_wake_up_state(u32 msecs);
-
+extern int ilitek_create_proc_for_oppo(struct touchpanel_data *ts);
+extern void ilitek_tddi_node_init(void);
+extern void ilitek_dump_data(void *data, int type, int len, int row_len, const char *name);
+extern u8 ilitek_calc_packet_checksum(u8 *packet, int len);
+extern void netlink_reply_msg(void *raw, int size);
+extern int katoi(char *str);
 
 static inline void ipio_kfree(void **mem)
 {

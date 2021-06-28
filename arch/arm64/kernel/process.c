@@ -58,6 +58,7 @@
 #include <asm/mmu_context.h>
 #include <asm/processor.h>
 #include <asm/stacktrace.h>
+#include <asm/esr.h>
 
 #ifdef CONFIG_CC_STACKPROTECTOR
 #include <linux/stackprotector.h>
@@ -86,16 +87,6 @@ void arch_cpu_idle(void)
 	cpu_do_idle();
 	local_irq_enable();
 	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, smp_processor_id());
-}
-
-void arch_cpu_idle_enter(void)
-{
-	idle_notifier_call_chain(IDLE_START);
-}
-
-void arch_cpu_idle_exit(void)
-{
-	idle_notifier_call_chain(IDLE_END);
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -193,7 +184,7 @@ static void show_data(unsigned long addr, int nbytes, const char *name)
 	 * don't attempt to dump non-kernel addresses or
 	 * values that are probably just small negative numbers
 	 */
-	if (addr < KIMAGE_VADDR || addr > -256UL)
+	if (addr < VA_START || addr > -256UL)
 		return;
 
 	printk("\n%s: %#lx:\n", name, addr);
@@ -229,18 +220,39 @@ static void show_data(unsigned long addr, int nbytes, const char *name)
 static void show_extra_register_data(struct pt_regs *regs, int nbytes)
 {
 	mm_segment_t fs;
+	unsigned int i;
 
 	fs = get_fs();
 	set_fs(KERNEL_DS);
 	show_data(regs->pc - nbytes, nbytes * 2, "PC");
 	show_data(regs->regs[30] - nbytes, nbytes * 2, "LR");
 	show_data(regs->sp - nbytes, nbytes * 2, "SP");
+	for (i = 0; i < 30; i++) {
+		char name[4];
+		snprintf(name, sizeof(name), "X%u", i);
+		show_data(regs->regs[i] - nbytes, nbytes * 2, name);
+	}
 	set_fs(fs);
 }
 
-#ifdef VENDOR_EDIT //yixue.ge@bsp.drv add for dump cpu contex for minidump
-extern void dumpcpuregs(struct pt_regs *pt_regs);
-#endif
+static unsigned int is_external_abort(void)
+{
+	unsigned int esr_el1 = 0;
+
+	asm volatile ("mrs %0, esr_el1\n\t"
+		      "dsb sy\n\t"
+		      : "=r"(esr_el1) : : "memory");
+
+	if ((ESR_ELx_EC(esr_el1) == ESR_ELx_EC_IABT_LOW) ||
+			(ESR_ELx_EC(esr_el1) == ESR_ELx_EC_IABT_CUR) ||
+			(ESR_ELx_EC(esr_el1) == ESR_ELx_EC_DABT_LOW) ||
+			(ESR_ELx_EC(esr_el1) == ESR_ELx_EC_DABT_CUR))
+		if ((esr_el1 & ESR_ELx_FSC) == ESR_ELx_FSC_EXTABT)
+			return 1;
+
+	return 0;
+}
+
 void __show_regs(struct pt_regs *regs)
 {
 	int i, top_reg;
@@ -256,13 +268,12 @@ void __show_regs(struct pt_regs *regs)
 		top_reg = 29;
 	}
 
-#ifdef VENDOR_EDIT //yixue.ge@bsp.drv add for dump cpu contex for minidump
-	dumpcpuregs(regs);
-#endif
 	show_regs_print_info(KERN_DEFAULT);
-	print_symbol("pc : %s\n", regs->pc);
-	print_symbol("lr : %s\n", lr);
-	printk("sp : %016llx pstate : %08llx\n", sp, regs->pstate);
+	print_symbol("PC is at %s\n", instruction_pointer(regs));
+	print_symbol("LR is at %s\n", lr);
+	printk("pc : [<%016llx>] lr : [<%016llx>] pstate: %08llx\n",
+	       regs->pc, lr, regs->pstate);
+	printk("sp : %016llx\n", sp);
 
 	i = top_reg;
 
@@ -277,8 +288,8 @@ void __show_regs(struct pt_regs *regs)
 
 		pr_cont("\n");
 	}
-	if (!user_mode(regs))
-		show_extra_register_data(regs, 64);
+	if (!user_mode(regs) && !is_external_abort())
+		show_extra_register_data(regs, 128);
 	printk("\n");
 }
 
@@ -373,7 +384,7 @@ int copy_thread(unsigned long clone_flags, unsigned long stack_start,
 			childregs->pstate |= PSR_UAO_BIT;
 
 		if (arm64_get_ssbd_state() == ARM64_SSBD_FORCE_DISABLE)
-			set_ssbs_bit(childregs);
+			childregs->pstate |= PSR_SSBS_BIT;
 
 		p->thread.cpu_context.x19 = stack_start;
 		p->thread.cpu_context.x20 = stk_sz;
@@ -413,7 +424,6 @@ void uao_thread_switch(struct task_struct *next)
 			asm(ALTERNATIVE("nop", SET_PSTATE_UAO(0), ARM64_HAS_UAO));
 	}
 }
-
 /*
  * Force SSBS state on context-switch, since it may be lost after migrating
  * from a CPU which treats the bit as RES0 in a heterogeneous system.
@@ -431,7 +441,7 @@ static void ssbs_thread_switch(struct task_struct *next)
 
 	/* If the mitigation is enabled, then we leave SSBS clear. */
 	if ((arm64_get_ssbd_state() == ARM64_SSBD_FORCE_ENABLE) ||
-	    test_tsk_thread_flag(next, TIF_SSBD))
+			test_tsk_thread_flag(next, TIF_SSBD))
 		return;
 
 	if (compat_user_mode(regs))
@@ -439,7 +449,6 @@ static void ssbs_thread_switch(struct task_struct *next)
 	else if (user_mode(regs))
 		set_ssbs_bit(regs);
 }
-
 /*
  * We store our current task in sp_el0, which is clobbered by userspace. Keep a
  * shadow copy so that we can restore this upon entry from userspace.
@@ -469,7 +478,6 @@ __notrace_funcgraph struct task_struct *__switch_to(struct task_struct *prev,
 	entry_task_switch(next);
 	uao_thread_switch(next);
 	ssbs_thread_switch(next);
-
 	/*
 	 * Complete any pending TLB or cache maintenance on this CPU in case
 	 * the thread migrates to a different CPU.
@@ -537,3 +545,45 @@ void arch_setup_new_exec(void)
 {
 	current->mm->context.flags = is_compat_task() ? MMCF_AARCH32 : 0;
 }
+
+#if defined(VENDOR_EDIT) && defined(CONFIG_ELSA_STUB)
+//zhoumingjun@Swdp.shanghai, 2017/04/19, add process_event_notifier support
+static BLOCKING_NOTIFIER_HEAD(process_event_notifier);
+
+int process_event_register_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_register(&process_event_notifier, nb);
+}
+EXPORT_SYMBOL(process_event_register_notifier);
+
+int process_event_unregister_notifier(struct notifier_block *nb)
+{
+	return blocking_notifier_chain_unregister(&process_event_notifier, nb);
+}
+EXPORT_SYMBOL(process_event_unregister_notifier);
+
+int process_event_notifier_call_chain(unsigned long action, struct process_event_data *pe_data)
+{
+	return blocking_notifier_call_chain(&process_event_notifier, action, pe_data);
+}
+
+//zhoumingjun@Swdp.shanghai, 2017/07/06, add process_event_notifier_atomic support
+static ATOMIC_NOTIFIER_HEAD(process_event_notifier_atomic);
+
+int process_event_register_notifier_atomic(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_register(&process_event_notifier_atomic, nb);
+}
+EXPORT_SYMBOL(process_event_register_notifier_atomic);
+
+int process_event_unregister_notifier_atomic(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_unregister(&process_event_notifier_atomic, nb);
+}
+EXPORT_SYMBOL(process_event_unregister_notifier_atomic);
+
+int process_event_notifier_call_chain_atomic(unsigned long action, struct process_event_data *pe_data)
+{
+	return atomic_notifier_call_chain(&process_event_notifier_atomic, action, pe_data);
+}
+#endif

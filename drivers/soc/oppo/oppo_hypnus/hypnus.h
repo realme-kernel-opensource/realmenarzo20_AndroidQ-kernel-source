@@ -131,6 +131,4 @@ long hypnus_ioctl_set_fpsgo(struct hypnus_data *pdata, unsigned int cmd, void *d
 long hypnus_ioctl_submit_ddr(struct hypnus_data *pdata, unsigned int cmd, void *data);
 long hypnus_ioctl_set_lpm_gov(struct hypnus_data *pdata,
 				 unsigned int cmd, void *data);
-long hypnus_ioctl_set_therm_delta(struct hypnus_data *pdata,
-				 unsigned int cmd, void *data);
 #endif

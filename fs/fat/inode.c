@@ -22,6 +22,8 @@
 #include <asm/unaligned.h>
 #include "fat.h"
 
+#include <mt-plat/mtk_blocktag.h>
+
 #ifndef CONFIG_FAT_DEFAULT_IOCHARSET
 /* if user don't select VFAT, this is undefined. */
 #define CONFIG_FAT_DEFAULT_IOCHARSET	""
@@ -222,6 +224,7 @@ static int fat_write_begin(struct file *file, struct address_space *mapping,
 	err = cont_write_begin(file, mapping, pos, len, flags,
 				pagep, fsdata, fat_get_block,
 				&MSDOS_I(mapping->host)->mmu_private);
+	mtk_btag_pidlog_set_pid(*pagep);
 	if (err < 0)
 		fat_write_failed(mapping, pos + len);
 	return err;
@@ -625,8 +628,10 @@ static void fat_free_eofblocks(struct inode *inode)
 		 */
 		err = __fat_write_inode(inode, inode_needs_sync(inode));
 		if (err) {
-			fat_msg_ratelimit(inode->i_sb, KERN_WARNING,
-				"Failed to update on disk inode for unused fallocated blocks, inode could be corrupted. Please run fsck");
+			fat_msg(inode->i_sb, KERN_WARNING, "Failed to "
+					"update on disk inode for unused "
+					"fallocated blocks, inode could be "
+					"corrupted. Please run fsck");
 		}
 
 	}
@@ -670,7 +675,7 @@ static void fat_set_state(struct super_block *sb,
 
 	bh = sb_bread(sb, 0);
 	if (bh == NULL) {
-		fat_msg_ratelimit(sb, KERN_ERR, "unable to read boot sector "
+		fat_msg(sb, KERN_ERR, "unable to read boot sector "
 			"to mark fs as dirty");
 		return;
 	}
@@ -849,7 +854,7 @@ retry:
 	fat_get_blknr_offset(sbi, i_pos, &blocknr, &offset);
 	bh = sb_bread(sb, blocknr);
 	if (!bh) {
-		fat_msg_ratelimit(sb, KERN_ERR, "unable to read inode block "
+		fat_msg(sb, KERN_ERR, "unable to read inode block "
 		       "for updating (i_pos %lld)", i_pos);
 		return -EIO;
 	}

@@ -483,43 +483,6 @@ out:
 EXPORT_SYMBOL_GPL(usb_gadget_wakeup);
 
 /**
- * usb_gsi_ep_op - performs operation on GSI accelerated EP based on EP op code
- *
- * Operations such as EP configuration, TRB allocation, StartXfer etc.
- * See gsi_ep_op for more details.
- */
-int usb_gsi_ep_op(struct usb_ep *ep,
-		struct usb_gsi_request *req, enum gsi_ep_op op)
-{
-	if (ep->ops->gsi_ep_op)
-		return ep->ops->gsi_ep_op(ep, req, op);
-
-	return -EOPNOTSUPP;
-}
-EXPORT_SYMBOL(usb_gsi_ep_op);
-
-/**
- * usb_gadget_func_wakeup - send a function remote wakeup up notification
- * to the host connected to this gadget
- * @gadget: controller used to wake up the host
- * @interface_id: the interface which triggered the remote wakeup event
- *
- * Returns zero on success. Otherwise, negative error code is returned.
- */
-int usb_gadget_func_wakeup(struct usb_gadget *gadget,
-	int interface_id)
-{
-	if (gadget->speed < USB_SPEED_SUPER)
-		return -EOPNOTSUPP;
-
-	if (!gadget->ops->func_wakeup)
-		return -EOPNOTSUPP;
-
-	return gadget->ops->func_wakeup(gadget, interface_id);
-}
-EXPORT_SYMBOL(usb_gadget_func_wakeup);
-
-/**
  * usb_gadget_set_selfpowered - sets the device selfpowered feature.
  * @gadget:the device being declared as self-powered
  *
@@ -1372,7 +1335,14 @@ static int udc_bind_to_driver(struct usb_udc *udc, struct usb_gadget_driver *dri
 		driver->unbind(udc->gadget);
 		goto err1;
 	}
-	usb_udc_connect_control(udc);
+
+	/* HACK to support Android */
+	/* usb_udc_connect_control(udc) */
+#ifdef CONFIG_USB_CONFIGFS
+	/* usb_udc_connect_control(udc); */
+	/* Just do pullup */
+	usb_gadget_connect(udc->gadget);
+#endif
 
 	kobject_uevent(&udc->dev.kobj, KOBJ_CHANGE);
 	return 0;
@@ -1397,6 +1367,8 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver)
 	mutex_lock(&udc_lock);
 	if (driver->udc_name) {
 		list_for_each_entry(udc, &udc_list, list) {
+			pr_info("%s %s %s\n", __func__,
+					driver->udc_name, dev_name(&udc->dev));
 			ret = strcmp(driver->udc_name, dev_name(&udc->dev));
 			if (!ret)
 				break;

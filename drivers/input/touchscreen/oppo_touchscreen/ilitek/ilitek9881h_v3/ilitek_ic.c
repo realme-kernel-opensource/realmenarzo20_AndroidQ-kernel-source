@@ -98,6 +98,10 @@ static int ilitek_tddi_ic_check_support(u32 pid, u16 id)
          * Since spi speed has been enabled previsouly whenever enter to ICE mode,
          * we have to disable if find out the ic is ili9881.
          */
+        if (idev->spi_speed != NULL && idev->chip->spi_speed_ctrl) {
+            idev->spi_speed(OFF);
+            idev->chip->spi_speed_ctrl = DISABLE;
+        }
 
         if (pid == ILI9881F_AA)
             idev->chip->no_bk_shift = RAWDATA_NO_BK_SHIFT_9881F;
@@ -114,6 +118,25 @@ static int ilitek_tddi_ic_check_support(u32 pid, u16 id)
     idev->chip->max_count = 0x1FFFF;
     idev->chip->open_c_formula = open_c_formula;
     return 0;
+}
+
+int ilitek_ice_mode_bit_mask_write(u32 addr, u32 mask, u32 value)
+{
+    int ret = 0;
+    u32 data = 0;
+
+    ret = ilitek_ice_mode_read(addr, &data, sizeof(u32));
+
+    data &= (~mask);
+    data |= (value & mask);
+
+    TPD_DEBUG("mask value data = %x\n", data);
+
+    ret = ilitek_ice_mode_write(addr, data, sizeof(u32));
+    if (ret < 0)
+        ipio_err("Failed to re-write data in ICE mode, ret = %d\n", ret);
+
+    return ret;
 }
 
 int ilitek_ice_mode_write(u32 addr, u32 data, int len)
@@ -207,16 +230,14 @@ int ilitek_ice_mode_ctrl(bool enable, bool mcu)
 
         do {
             ret = idev->write(cmd_open, sizeof(cmd_open));
-            if (ret < 0) {
+            if (ret < 0)
                 continue;
-            }
+
+            if (idev->spi_speed != NULL && idev->chip->spi_speed_ctrl)
+                idev->spi_speed(ON);
 
             /* Read chip id to ensure that ice mode is enabled successfully */
             ret = ilitek_ice_mode_read(idev->chip->pid_addr, &pid, sizeof(u32));
-            if (ret < 0) {
-                continue;
-            }
-
             ret = ilitek_tddi_ic_check_support(pid, pid >> 16);
             if (ret == 0)
                 break;
@@ -247,8 +268,7 @@ out:
 
 int ilitek_tddi_ic_watch_dog_ctrl(bool write, bool enable)
 {
-    int timeout = 50;
-    int ret = 0;
+    int timeout = 50, ret = 0;
     u32 reg_data = 0;
     if (!atomic_read(&idev->ice_stat)) {
         ipio_err("ice mode wasn't enabled\n");
@@ -258,6 +278,12 @@ int ilitek_tddi_ic_watch_dog_ctrl(bool write, bool enable)
     if (idev->chip->wdt_addr <= 0 || idev->chip->id <= 0) {
         ipio_err("WDT/CHIP ID is invalid\n");
         return -EINVAL;
+    }
+
+    /* FW will automatiacally disable WDT in I2C */
+    if (idev->wtd_ctrl == OFF) {
+        TPD_INFO("WDT ctrl is off, do nothing\n");
+        return 0;
     }
 
     if (!write) {
@@ -370,7 +396,7 @@ int ilitek_tddi_ic_code_reset(void)
 int ilitek_tddi_ic_whole_reset(void)
 {
     TPD_INFO("ic whole reset key = 0x%x, edge_delay = %d\n",
-             idev->chip->reset_key, RST_EDGE_DELAY);
+             idev->chip->reset_key, idev->rst_edge_delay);
 
     if (ilitek_ice_mode_write(idev->chip->reset_key,
                               idev->chip->reset_addr,
@@ -378,17 +404,17 @@ int ilitek_tddi_ic_whole_reset(void)
         ipio_err("ic whole reset failed\n");
         return -1;
     }
-    msleep(RST_EDGE_DELAY);
+    msleep(idev->rst_edge_delay);
     return 0;
 }
 
 static void ilitek_tddi_ic_wr_pack(int packet)
 {
+    int ret = 0;
     int retry = 5;
     u32 reg_data = 0;
 
     while (retry--) {
-        int ret = 0;
         ret = ilitek_ice_mode_read(0x73010, &reg_data, sizeof(u8));
         if (ret >= 0 && (reg_data & 0x02) == 0) {
             TPD_INFO("check ok 0x73010 read 0x%X retry = %d\n", reg_data, retry);
@@ -539,6 +565,21 @@ void ilitek_tddi_ic_check_otp_prog_mode(void)
         ipio_err("OTP Program mode error!\n");
 }
 
+void ilitek_tddi_ic_spi_speed_ctrl(bool enable)
+{
+    TPD_INFO("%s spi speed up\n", (enable ? "Enable" : "Disable"));
+
+    if (enable) {
+        ilitek_ice_mode_write(0x063820, 0x00000101, 4);
+        ilitek_ice_mode_write(0x042c34, 0x00000008, 4);
+        ilitek_ice_mode_write(0x063820, 0x00000000, 4);
+    } else {
+        ilitek_ice_mode_write(0x063820, 0x00000101, 4);
+        ilitek_ice_mode_write(0x042c34, 0x00000000, 4);
+        ilitek_ice_mode_write(0x063820, 0x00000000, 4);
+    }
+}
+
 u32 ilitek_tddi_ic_get_pc_counter(void)
 {
     bool ice = atomic_read(&idev->ice_stat);
@@ -555,6 +596,27 @@ u32 ilitek_tddi_ic_get_pc_counter(void)
         ilitek_ice_mode_ctrl(DISABLE, OFF);
 
     return pc;
+}
+
+int ilitek_tddi_ic_check_int_stat(void)
+{
+    int timer = 5000;
+
+    /* From FW request, timeout should at least be 5 sec */
+    while (--timer > 0) {
+        if (atomic_read(&idev->mp_int_check) == DISABLE)
+            break;
+        mdelay(1);
+    }
+
+    if (timer > 0) {
+        TPD_INFO("Interrupt for MP is active\n");
+        return 0;
+    }
+
+    ipio_err("Error! Interrupt for MP isn't received\n");
+    atomic_set(&idev->mp_int_check, DISABLE);
+    return -1;
 }
 
 int ilitek_tddi_ic_check_busy(int count, int delay)
@@ -630,6 +692,7 @@ int ilitek_tddi_ic_get_core_ver(void)
 
 int ilitek_tddi_ic_get_fw_ver(void)
 {
+    uint8_t ver_len = 0;
     u8 cmd[2] = {0};
     u8 buf[10] = {0};
     char dev_version[MAX_DEVICE_VERSION_LENGTH] = {0};
@@ -659,12 +722,11 @@ int ilitek_tddi_ic_get_fw_ver(void)
     TPD_INFO("Firmware version = %d.%d.%d.%d\n", buf[1], buf[2], buf[3], buf[4]);
     idev->chip->fw_ver = buf[1] << 24 | buf[2] << 16 | buf[3] << 8 | buf[4];
 
-    snprintf(dev_version, MAX_DEVICE_VERSION_LENGTH, "%02X", buf[3]);
+    sprintf(dev_version, "%02X", buf[3]);
 
     if (idev->ts->panel_data.manufacture_info.version) {
-        u8 ver_len = 0;
         if (idev->ts->panel_data.vid_len == 0) {
-            //ver_len = strlen(idev->ts->panel_data.manufacture_info.version);
+            ver_len = strlen(idev->ts->panel_data.manufacture_info.version);
             strlcpy(&(idev->ts->panel_data.manufacture_info.version[12]), dev_version, 3);
         } else {
             ver_len = idev->ts->panel_data.vid_len;
@@ -881,6 +943,7 @@ void ilitek_tddi_ic_init(void)
     chip.otp_addr =               TDDI_OTP_ID_ADDR;
     chip.ana_addr =               TDDI_ANA_ID_ADDR;
     chip.reset_addr =           TDDI_CHIP_RESET_ADDR;
+    chip.spi_speed_ctrl =        ENABLE;
 
     idev->protocol = &protocol_info[PROTOCL_VER_NUM - 1];
     idev->chip = &chip;

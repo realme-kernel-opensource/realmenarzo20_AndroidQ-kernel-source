@@ -26,6 +26,7 @@
 #include <net/inet_frag.h>
 #include <net/ping.h>
 #include <net/protocol.h>
+#include <net/ip6_route.h>
 
 static int zero;
 static int one = 1;
@@ -37,6 +38,8 @@ static int ip_local_port_range_min[] = { 1, 1 };
 static int ip_local_port_range_max[] = { 65535, 65535 };
 static int tcp_adv_win_scale_min = -31;
 static int tcp_adv_win_scale_max = 31;
+static int tcp_min_snd_mss_min = TCP_MIN_SND_MSS;
+static int tcp_min_snd_mss_max = 65535;
 static int ip_privileged_port_min;
 static int ip_privileged_port_max = 65535;
 static int ip_ttl_min = 1;
@@ -45,10 +48,6 @@ static int tcp_syn_retries_min = 1;
 static int tcp_syn_retries_max = MAX_TCP_SYNCNT;
 static int ip_ping_group_range_min[] = { 0, 0 };
 static int ip_ping_group_range_max[] = { GID_T_MAX, GID_T_MAX };
-static int tcp_delack_seg_min = TCP_DELACK_MIN;
-static int tcp_delack_seg_max = 60;
-static int tcp_use_userconfig_min;
-static int tcp_use_userconfig_max = 1;
 static int one_day_secs = 24 * 3600;
 
 /* obsolete */
@@ -775,17 +774,6 @@ static struct ctl_table ipv4_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_doulongvec_minmax,
 	},
-	#ifdef VENDOR_EDIT
-	//Mengqing.Zhao@PSW.CN.WiFi.Network.internet.1394484, 2019/04/02,
-	//add for: When find TCP SYN-ACK Timestamp value error, just do not use Timestamp
-	{
-		.procname	= "tcp_timestamps_control",
-		.data		= &sysctl_tcp_ts_control,
-		.maxlen		= sizeof(sysctl_tcp_ts_control),
-		.mode		= 0664,
-		.proc_handler	= proc_dointvec
-	},
-	#endif /* VENDOR_EDIT */
 	{
 		.procname	= "udp_rmem_min",
 		.data		= &sysctl_udp_rmem_min,
@@ -802,24 +790,29 @@ static struct ctl_table ipv4_table[] = {
 		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &one
 	},
+	 #ifdef VENDOR_EDIT
+	//Mengqing.Zhao@PSW.CN.WiFi.Network.internet.1394484, 2019/04/02,
+	//add for: When find TCP SYN-ACK Timestamp value error, just do not use Timestamp
 	{
-		.procname	= "tcp_delack_seg",
-		.data		= &sysctl_tcp_delack_seg,
-		.maxlen		= sizeof(sysctl_tcp_delack_seg),
-		.mode		= 0644,
-		.proc_handler	= tcp_proc_delayed_ack_control,
-		.extra1		= &tcp_delack_seg_min,
-		.extra2		= &tcp_delack_seg_max,
+		.procname	= "tcp_timestamps_control",
+		.data		= &sysctl_tcp_ts_control,
+		.maxlen		= sizeof(sysctl_tcp_ts_control),
+		.mode		= 0664,
+		.proc_handler	= proc_dointvec
 	},
+	#endif /* VENDOR_EDIT */
+
+	 #ifdef VENDOR_EDIT
+	//Ming.Liu@PSW.CN.WiFi.Network.quality.1065762, 2016/10/09,
+	//add for: [monitor tcp info]
 	{
-		.procname       = "tcp_use_userconfig",
-		.data           = &sysctl_tcp_use_userconfig,
-		.maxlen         = sizeof(sysctl_tcp_use_userconfig),
-		.mode           = 0644,
-		.proc_handler   = tcp_use_userconfig_sysctl_handler,
-		.extra1		= &tcp_use_userconfig_min,
-		.extra2		= &tcp_use_userconfig_max,
+		.procname	= "tcp_info_print",
+		.data		= &sysctl_tcp_info_print,
+		.maxlen		= sizeof(int),
+		.mode		= 0664,
+		.proc_handler	= proc_do_print_tcpinfo
 	},
+	#endif /* VENDOR_EDIT */
 
 	{ }
 };
@@ -940,13 +933,6 @@ static struct ctl_table ipv4_net_table[] = {
 		.proc_handler	= proc_do_large_bitmap,
 	},
 	{
-		.procname       = "reserved_port_bind",
-		.data           = &sysctl_reserved_port_bind,
-		.maxlen         = sizeof(int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec
-	},
-	{
 		.procname	= "ip_no_pmtu_disc",
 		.data		= &init_net.ipv4.sysctl_ip_no_pmtu_disc,
 		.maxlen		= sizeof(int),
@@ -1005,6 +991,15 @@ static struct ctl_table ipv4_net_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "tcp_min_snd_mss",
+		.data		= &init_net.ipv4.sysctl_tcp_min_snd_mss,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &tcp_min_snd_mss_min,
+		.extra2		= &tcp_min_snd_mss_max,
 	},
 	{
 		.procname	= "tcp_probe_threshold",
@@ -1231,7 +1226,17 @@ static struct ctl_table ipv4_net_table[] = {
 		.proc_handler	= proc_dointvec
 	},
 	#endif /* VENDOR_EDIT */
+	{ }
+};
 
+static struct ctl_table net_table[] = {
+	{
+		.procname = "optr",
+		.data = &sysctl_optr,
+		.maxlen = sizeof(int),
+		.mode = 0664,
+		.proc_handler = proc_dointvec,
+	},
 	{ }
 };
 
@@ -1293,6 +1298,10 @@ static __init int sysctl_ipv4_init(void)
 	hdr = register_net_sysctl(&init_net, "net/ipv4", ipv4_table);
 	if (!hdr)
 		return -ENOMEM;
+
+	hdr = register_net_sysctl(&init_net, "net", net_table);
+	if (!hdr)
+		pr_info("[mtk_net] register net sysctl optr is fail.\n");
 
 	if (register_pernet_subsys(&ipv4_sysctl_ops)) {
 		unregister_net_sysctl_table(hdr);

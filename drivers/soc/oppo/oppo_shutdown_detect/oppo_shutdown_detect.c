@@ -58,7 +58,10 @@
 
 #include <linux/kmsg_dump.h>
 
+//#ifdef VENDOR_EDIT
+//zhouhengguo@BSP.Stabliity, 2019.10.14, add for aging version
 #include <soc/oppo/oppo_project.h>
+//#endif
 
 #define SEQ_printf(m, x...)     \
     do {                        \
@@ -103,8 +106,8 @@
 #define SHUTDOWN_STAGE_INIT_POFF            70
 #define SHUTDOWN_RUS_MIN                    255
 #define SHUTDOWN_TOTAL_TIME_MIN             60
-#define SHUTDOWN_DEFAULT_NATIVE_TIME        15
-#define SHUTDOWN_DEFAULT_JAVA_TIME          15
+#define SHUTDOWN_DEFAULT_NATIVE_TIME        10
+#define SHUTDOWN_DEFAULT_JAVA_TIME          10
 #define SHUTDOWN_DEFAULT_TOTAL_TIME         90
 #define SHUTDOWN_INCREASE_TIME              5
 
@@ -189,7 +192,7 @@ static ssize_t shutdown_detect_trigger(struct file *filp, const char *ubuf, size
          val = SHUTDOWN_STAGE_INIT;
     }
 
-    if (RELEASE != get_eng_version()) {
+    if (0 != get_eng_version()) {
         gnativetimeout += SHUTDOWN_INCREASE_TIME;
         gjavatimeout += SHUTDOWN_INCREASE_TIME;
     }
@@ -218,7 +221,7 @@ static ssize_t shutdown_detect_trigger(struct file *filp, const char *ubuf, size
     case SHUTDOWN_STAGE_KERNEL:
         shutdown_kernel_start_time = current_kernel_time().tv_sec;
         pr_info("shutdown_kernel_start_time %ld\n", shutdown_kernel_start_time);
-        if((shutdown_kernel_start_time - shutdown_init_start_time) > gnativetimeout) {
+        if((shutdown_init_start_time - shutdown_kernel_start_time) > gnativetimeout) {
             pr_err("shutdown_detect_timeout: timeout happened in reboot.cpp\n");
             shutdown_dump_kernel_log();
             shutdown_timeout_flag_write(1);
@@ -528,7 +531,7 @@ static int shutdown_detect_func(void *dummy)
 
     shutdown_timeout_flag_write(1);// timeout happened
 
-    if (RELEASE == get_eng_version()) {
+    if (0 == get_eng_version()) {
         if(is_shutdows){
             pr_err("shutdown_detect: shutdown or reboot? shutdown\n");
             if(shutdown_task) {

@@ -28,18 +28,6 @@ struct alloc_wait_para {
 	u64 fg_alloc_wait_max_order;
 };
 
-struct ion_wait_para {
-       u64 total_ion_wait_h_cnt;
-       u64 total_ion_wait_l_cnt;
-       u64 fg_ion_wait_h_cnt;
-       u64 fg_ion_wait_l_cnt;
-       u64 total_ion_wait_max_ms;
-};
-
 extern void memory_alloc_monitor(gfp_t gfp_mask, unsigned int order, u64 wait_ms);
 extern struct alloc_wait_para allocwait_para;
-
-extern void oppo_ionwait_monitor(u64 wait_ms);
-extern struct ion_wait_para ionwait_para;
-
 #endif /*_MEMORY_MONITOR_H_*/

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 VERSION = 4
 PATCHLEVEL = 14
-SUBLEVEL = 117
+SUBLEVEL = 141
 EXTRAVERSION =
 NAME = Petit Gorille
 
@@ -272,6 +272,34 @@ else
 scripts/Kbuild.include: ;
 include scripts/Kbuild.include
 
+#ifdef VENDOR_EDIT
+#Jianchao.Shi@PSW.BSP.CHG.Basic, 2019/05/09, sjc Add for 806 high/low temp aging test
+ifeq ($(OPPO_HIGH_TEMP_VERSION),true)
+KBUILD_CFLAGS += -DCONFIG_HIGH_TEMP_VERSION
+KBUILD_CPPFLAGS += -DCONFIG_HIGH_TEMP_VERSION
+endif
+#endif /* VENDOR_EDIT */
+
+
+#ifdef VENDOR_EDIT
+#fanhui@PhoneSW.BSP, 2016-05-18, add for DeathHealer only used in release
+ifneq ($(filter user,$(TARGET_BUILD_VARIANT)),)
+KBUILD_CFLAGS += -DOPPO_RELEASE_FLAG
+KBUILD_CPPFLAGS += -DOPPO_RELEASE_FLAG
+endif
+#endif /* VENDOR_EDIT */
+
+#ifdef  VENDOR_EDIT
+#ye.zhang@Sensor.config,2016-09-09, add for CTSI support external storage or not
+ifneq ($(OPPO_BUILD_CUSTOMIZE),)
+$(info @@@@@@@@@@@ OPPO_BUILD_CUSTOMIZE is $(OPPO_BUILD_CUSTOMIZE))
+KBUILD_CFLAGS += -DMOUNT_EXSTORAGE_IF
+KBUILD_CPPFLAGS += -DMOUNT_EXSTORAGE_IF
+CFLAGS_KERNEL += -DMOUNT_EXSTORAGE_IF
+CFLAGS_MODULE += -DMOUNT_EXSTORAGE_IF
+endif
+#endif//VENDOR_EDIT
+
 # Read KERNELRELEASE from include/config/kernel.release (if it exists)
 KERNELRELEASE = $(shell cat include/config/kernel.release 2> /dev/null)
 KERNELVERSION = $(VERSION)$(if $(PATCHLEVEL),.$(PATCHLEVEL)$(if $(SUBLEVEL),.$(SUBLEVEL)))$(EXTRAVERSION)
@@ -369,16 +397,11 @@ HOSTCXXFLAGS := -O2 $(HOST_LFS_CFLAGS)
 HOSTLDFLAGS  := $(HOST_LFS_LDFLAGS)
 HOST_LOADLIBES := $(HOST_LFS_LIBS)
 
-ifeq ($(shell $(HOSTCC) -v 2>&1 | grep -c "clang version"), 1)
-HOSTCFLAGS  += -Wno-unused-value -Wno-unused-parameter \
-		-Wno-missing-field-initializers
-endif
-
 # Make variables (CC, etc...)
 AS		= $(CROSS_COMPILE)as
 LD		= $(CROSS_COMPILE)ld
-REAL_CC		= $(CROSS_COMPILE)gcc
 LDGOLD		= $(CROSS_COMPILE)ld.gold
+CC		= $(CROSS_COMPILE)gcc
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
@@ -392,10 +415,6 @@ DEPMOD		= /sbin/depmod
 PERL		= perl
 PYTHON		= python
 CHECK		= sparse
-
-# Use the wrapper for the compiler.  This wrapper scans for new
-# warnings and causes the build to stop upon encountering them
-CC		= $(PYTHON) $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)
 
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
@@ -421,6 +440,7 @@ LINUXINCLUDE    := \
 		-I$(srctree)/arch/$(hdr-arch)/include \
 		-I$(objtree)/arch/$(hdr-arch)/include/generated \
 		$(if $(KBUILD_SRC), -I$(srctree)/include) \
+		-I$(srctree)/drivers/misc/mediatek/include \
 		-I$(objtree)/include \
 		$(USERINCLUDE)
 
@@ -437,70 +457,34 @@ KBUILD_AFLAGS_MODULE  := -DMODULE
 KBUILD_CFLAGS_MODULE  := -DMODULE
 KBUILD_LDFLAGS_MODULE := -T $(srctree)/scripts/module-common.lds
 GCC_PLUGINS_CFLAGS :=
+CLANG_FLAGS :=
 
-# ifdef VENDOR_EDIT
-# Weizhi.Chen@BSP.Kernel.Driver, 2019/10/09, Add for enviroment variant.
+#ifdef  VENDOR_EDIT
+#LiPing-m@PSW.MM.Display.LCD.Machine, 2017/11/03, Add for VENDOR_EDIT macro in kernel
 KBUILD_CFLAGS +=   -DVENDOR_EDIT
 KBUILD_CPPFLAGS += -DVENDOR_EDIT
 CFLAGS_KERNEL +=   -DVENDOR_EDIT
 CFLAGS_MODULE +=   -DVENDOR_EDIT
-
-# ifdef ODM_WT_EDIT
-# xubuchao1_wt@WT.BSP.Kernel.Driver, 2020/04/22, Add for ODM_WT_EDIT
-KBUILD_CFLAGS +=   -DODM_WT_EDIT
-KBUILD_CPPFLAGS += -DODM_WT_EDIT
-CFLAGS_KERNEL +=   -DODM_WT_EDIT
-CFLAGS_MODULE +=   -DODM_WT_EDIT
-
-#ifdef VENDOR_EDIT
-#ye.zhang@BSP.Boot.Bootflow, 2020-3-20, Modify for diable QSSI
-ifeq ($(SHIPPING_API_LEVEL), 28)
-$(warning "SHIPPING_API_LEVEL is 28")
-CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE=y
-endif
-#endif//VENDOR_EDIT
-
-ifneq ($(CONFIDENTIAL_EUCLID_VERSION),0)
-KBUILD_CFLAGS +=   -DCONFIG_CONFIDENTIAL_EUCLID_VERSION
-endif
-# endif /* VENDOR_EDIT */
-
-#ifdef VENDOR_EDIT
-#Ke.Li@ROM, Security, 2020-01-10, bypass exec and remount security feature in DEV version
-ifeq ($(OBSOLETE_KEEP_ADB_SECURE),1)
-KBUILD_CFLAGS += -DOPPO_DISALLOW_KEY_INTERFACES
-endif
-#endif
-
-#Hui.Fan@BSP.Kernel.Security, 2017-02-12
-#Obscure the cpu model number in confidential version
-ifeq ($(CONFIDENTIAL_VERSION),1)
-KBUILD_CFLAGS += -DCONFIG_CONFIDENTIAL_VERSION
-endif
-
-#ifdef VENDOR_EDIT
-#Jacky Zhuo@PSW.BSP.CHG.Basic, 2019/11/29, sjc Add for 806 high/low temp aging test
-ifeq ($(OPPO_HIGH_TEMP_VERSION),true)
-KBUILD_CFLAGS += -DCONFIG_HIGH_TEMP_VERSION
-KBUILD_CPPFLAGS += -DCONFIG_HIGH_TEMP_VERSION
-endif
 #endif /* VENDOR_EDIT */
 
 #ifdef VENDOR_EDIT
-#huangjianan@TECH.Storage.FS.F2FS, 2020-03-08, add for aging version
-ifneq (,$(findstring Aging,$(SPECIAL_VERSION)))
-OPPO_F2FS_DEBUG := true
+#zhouhengguo@PSW.BSP.Kernel.Stablity, 2019/11/05, add daily build
+ifneq ($(TARGET_BUILD_VARIANT), user)
+KBUILD_CFLAGS   += -DOPPO_TARGET_BUILD_DAILY
+KBUILD_CPPFLAGS += -DOPPO_TARGET_BUILD_DAILY
+CFLAGS_KERNEL   += -DOPPO_TARGET_BUILD_DAILY
+CFLAGS_MODULE   += -DOPPO_TARGET_BUILD_DAILY
 endif
-
-export OPPO_F2FS_DEBUG
-#endif /* VENDOR_EDIT */
+#endif /*VENDOR_EDIT*/
 
 #ifdef VENDOR_EDIT
-#yulianghan@bsp.bootflow, 2020-05-19, add for aging version
-ifneq (,$(findstring aging,$(ENGINEERING_VARIANT)))
-KBUILD_CFLAGS += -DMSM_EMMC_ENG_CDT
-endif
-#endif /* VENDOR_EDIT */
+#//Liang.Zhang@PSW.TECH.Bootup, 2018/10/19, Add for kernel monitor whole bootup
+#ifdef HANG_OPPO_ALL
+KBUILD_CFLAGS +=   -DHANG_OPPO_ALL
+KBUILD_CPPFLAGS += -DHANG_OPPO_ALL
+CFLAGS_KERNEL +=   -DHANG_OPPO_ALL
+CFLAGS_MODULE +=   -DHANG_OPPO_ALL
+#ifdef VENDOR_EDIT
 
 export ARCH SRCARCH CONFIG_SHELL HOSTCC HOSTCFLAGS CROSS_COMPILE AS LD CC
 export CPP AR NM STRIP OBJCOPY OBJDUMP HOSTLDFLAGS HOST_LOADLIBES
@@ -554,7 +538,7 @@ endif
 ifeq ($(cc-name),clang)
 ifneq ($(CROSS_COMPILE),)
 CLANG_TRIPLE	?= $(CROSS_COMPILE)
-CLANG_FLAGS	:= --target=$(notdir $(CLANG_TRIPLE:%-=%))
+CLANG_FLAGS	+= --target=$(notdir $(CLANG_TRIPLE:%-=%))
 ifeq ($(shell $(srctree)/scripts/clang-android.sh $(CC) $(CLANG_FLAGS)), y)
 $(error "Clang with Android --target detected. Did you specify CLANG_TRIPLE?")
 endif
@@ -566,6 +550,7 @@ ifneq ($(GCC_TOOLCHAIN),)
 CLANG_FLAGS	+= --gcc-toolchain=$(GCC_TOOLCHAIN)
 endif
 CLANG_FLAGS	+= -no-integrated-as
+CLANG_FLAGS	+= -Werror=unknown-warning-option
 KBUILD_CFLAGS	+= $(CLANG_FLAGS)
 KBUILD_AFLAGS	+= $(CLANG_FLAGS)
 export CLANG_FLAGS
@@ -712,9 +697,7 @@ all: vmlinux
 
 KBUILD_CFLAGS	+= $(call cc-option,-fno-PIE)
 KBUILD_AFLAGS	+= $(call cc-option,-fno-PIE)
-CFLAGS_GCOV	:= -fprofile-arcs -ftest-coverage \
-		$(call cc-option,-fno-tree-loop-im) \
-		$(call cc-disable-warning,maybe-uninitialized,)
+CFLAGS_GCOV	:= -fprofile-arcs -ftest-coverage -fno-tree-loop-im $(call cc-disable-warning,maybe-uninitialized,)
 CFLAGS_KCOV	:= $(call cc-option,-fsanitize-coverage=trace-pc,)
 export CFLAGS_GCOV CFLAGS_KCOV
 
@@ -744,6 +727,7 @@ KBUILD_CFLAGS	+= $(call cc-disable-warning,frame-address,)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, format-truncation)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, format-overflow)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, int-in-bool-context)
+KBUILD_CFLAGS	+= $(call cc-disable-warning, address-of-packed-member)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, attribute-alias)
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
@@ -810,16 +794,8 @@ ifeq ($(cc-name),clang)
 KBUILD_CPPFLAGS += $(call cc-option,-Qunused-arguments,)
 KBUILD_CFLAGS += $(call cc-disable-warning, format-invalid-specifier)
 KBUILD_CFLAGS += $(call cc-disable-warning, gnu)
-KBUILD_CFLAGS += $(call cc-disable-warning, address-of-packed-member)
 KBUILD_CFLAGS += $(call cc-disable-warning, duplicate-decl-specifier)
-KBUILD_CFLAGS += -fno-builtin
-KBUILD_CFLAGS += $(call cc-option, -Wno-undefined-optimized)
-KBUILD_CFLAGS += $(call cc-option, -Wno-tautological-constant-out-of-range-compare)
-KBUILD_CFLAGS += $(call cc-option, -mllvm -disable-struct-const-merge)
-KBUILD_CFLAGS += $(call cc-option, -Wno-sometimes-uninitialized)
-
 # Quiet clang warning: comparison of unsigned expression < 0 is always false
-
 KBUILD_CFLAGS += $(call cc-disable-warning, tautological-compare)
 # CLANG uses a _MergedGlobals as optimization, but this breaks modpost, as the
 # source of a reference will be _MergedGlobals and not on of the whitelisted names.
@@ -828,13 +804,36 @@ KBUILD_CFLAGS += $(call cc-option, -mno-global-merge,)
 KBUILD_CFLAGS += $(call cc-option, -fcatch-undefined-behavior)
 else
 
-KBUILD_CFLAGS += $(call cc-option,-fno-delete-null-pointer-checks,)
 # These warnings generated too much noise in a regular build.
 # Use make W=1 to enable them (see scripts/Makefile.extrawarn)
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-but-set-variable)
 endif
 
 KBUILD_CFLAGS += $(call cc-disable-warning, unused-const-variable)
+
+ifdef ODM_WT_EDIT
+#Junbo.Guo@ODM_WT.BSP.Kernel.Boot, 2019/10/4, Add for ODM_WT_EDIT
+KBUILD_CFLAGS += $(MTK_CDEFS)
+endif
+
+ifdef CONFIG_ODM_WT_EDIT
+#Junbo.Guo@ODM_WT.BSP.Kernel.Boot, 2019/10/22, Add for ODM_WT_EDIT
+$(warning *****CONFIG_ODM_WT_EDIT is defined****)
+KBUILD_CFLAGS +=   -DODM_WT_EDIT
+KBUILD_CPPFLAGS += -DODM_WT_EDIT
+CFLAGS_KERNEL +=   -DODM_WT_EDIT
+CFLAGS_MODULE +=   -DODM_WT_EDIT
+export ODM_WT_EDIT=yes
+endif
+
+ifdef ODM_WT_EDIT
+#Hui.Yuan@ODM_WT.BSP.Kernel.stability, 2020/06/09,modify for aee_kpd_enable control*/
+ifeq ($(OBSOLETE_KEEP_ADB_SECURE),1)
+$(warning *****DENABLE_LONG_PWKDUMP is defined****)
+KBUILD_CFLAGS += -DENABLE_LONG_PWKDUMP
+endif
+endif
+
 ifdef CONFIG_FRAME_POINTER
 KBUILD_CFLAGS	+= -fno-omit-frame-pointer -fno-optimize-sibling-calls
 else
@@ -846,6 +845,11 @@ else
 ifndef CONFIG_FUNCTION_TRACER
 KBUILD_CFLAGS	+= -fomit-frame-pointer
 endif
+endif
+
+# Initialize all stack variables with a pattern, if desired.
+ifdef CONFIG_INIT_STACK_ALL
+KBUILD_CFLAGS	+= -ftrivial-auto-var-init=pattern
 endif
 
 KBUILD_CFLAGS   += $(call cc-option, -fno-var-tracking-assignments)
@@ -916,7 +920,7 @@ export LDFINAL_vmlinux LDFLAGS_FINAL_vmlinux
 endif
 
 ifdef CONFIG_CFI_CLANG
-cfi-clang-flags	+= -fsanitize=cfi $(call cc-option, -fsplit-lto-unit)
+cfi-clang-flags	+= -fsanitize=cfi
 DISABLE_CFI_CLANG := -fno-sanitize=cfi
 ifdef CONFIG_MODULES
 cfi-clang-flags	+= -fsanitize-cfi-cross-dso

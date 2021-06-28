@@ -34,6 +34,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/blk-cgroup.h>
 #include <linux/debugfs.h>
+#include <mt-plat/mtk_blocktag.h> /* MTK PATCH */
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/block.h>
@@ -43,21 +44,8 @@
 #include "blk-mq-sched.h"
 #include "blk-wbt.h"
 
-#include <linux/math64.h>
-
 #ifdef CONFIG_DEBUG_FS
 struct dentry *blk_debugfs_root;
-#endif
-
-/*Hank.liu@TECH.BSP Kernel IO Latency  2019-03-21,io information*/
-#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
-extern void ohm_iolatency_record(struct request * req,unsigned int nr_bytes, int fg, u64 delta_ms);
-extern unsigned long ufs_outstanding;
-static u64 latency_count;
-static u32 io_print_count;
-bool       io_print_flag;
-#define    PRINT_LATENCY     500*1000
-#define    COUNT_TIME      24*60*60*1000
 #endif
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_remap);
@@ -356,7 +344,6 @@ void blk_sync_queue(struct request_queue *q)
 		struct blk_mq_hw_ctx *hctx;
 		int i;
 
-		cancel_delayed_work_sync(&q->requeue_work);
 		queue_for_each_hw_ctx(q, hctx, i)
 			cancel_delayed_work_sync(&hctx->run_work);
 	} else {
@@ -639,35 +626,6 @@ void blk_set_queue_dying(struct request_queue *q)
 }
 EXPORT_SYMBOL_GPL(blk_set_queue_dying);
 
-/* Unconfigure the I/O scheduler and dissociate from the cgroup controller. */
-void blk_exit_queue(struct request_queue *q)
-{
-	/*
-	 * Since the I/O scheduler exit code may access cgroup information,
-	 * perform I/O scheduler exit before disassociating from the block
-	 * cgroup controller.
-	 */
-	if (q->elevator) {
-		ioc_clear_queue(q);
-		elevator_exit(q, q->elevator);
-		q->elevator = NULL;
-	}
-
-	/*
-	 * Remove all references to @q from the block cgroup controller before
-	 * restoring @q->queue_lock to avoid that restoring this pointer causes
-	 * e.g. blkcg_print_blkgs() to crash.
-	 */
-	blkcg_exit_queue(q);
-
-	/*
-	 * Since the cgroup code may dereference the @q->backing_dev_info
-	 * pointer, only decrease its reference count after having removed the
-	 * association with the block cgroup controller.
-	 */
-	bdi_put(q->backing_dev_info);
-}
-
 /**
  * blk_cleanup_queue - shutdown a request queue
  * @q: request queue to shutdown
@@ -729,7 +687,7 @@ void blk_cleanup_queue(struct request_queue *q)
 	/* @q won't process any more request, flush async actions */
 	del_timer_sync(&q->backing_dev_info->laptop_mode_wb_timer);
 	blk_sync_queue(q);
-    blk_exit_queue(q);
+
 	if (q->mq_ops)
 		blk_mq_free_queue(q);
 	percpu_ref_exit(&q->q_usage_counter);
@@ -865,6 +823,12 @@ static void blk_queue_usage_counter_release(struct percpu_ref *ref)
 	wake_up_all(&q->mq_freeze_wq);
 }
 
+#ifdef VENDOR_EDIT
+/*Huacai.Zhou@PSW.BSP.Kernel.Performance, 2018-04-28, add foreground task io opt*/
+#define FG_CNT_DEF 20
+#define BOTH_CNT_DEF 10
+#endif /*VENDOR_EDIT*/
+
 static void blk_rq_timed_out_timer(unsigned long data)
 {
 	struct request_queue *q = (struct request_queue *)data;
@@ -872,11 +836,6 @@ static void blk_rq_timed_out_timer(unsigned long data)
 	kblockd_schedule_work(&q->timeout_work);
 }
 
-#ifdef VENDOR_EDIT
-/*Huacai.Zhou@PSW.BSP.Kernel.Performance, 2018-04-28, add foreground task io opt*/
-#define FG_CNT_DEF 20
-#define BOTH_CNT_DEF 10
-#endif /*VENDOR_EDIT*/
 struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 {
 	struct request_queue *q;
@@ -1491,9 +1450,6 @@ static struct request *blk_old_get_request(struct request_queue *q,
 	/* q->queue_lock is unlocked at this point */
 	rq->__data_len = 0;
 	rq->__sector = (sector_t) -1;
-#ifdef CONFIG_PFK
-	rq->__dun = 0;
-#endif
 	rq->bio = rq->biotail = NULL;
 	return rq;
 }
@@ -1717,9 +1673,6 @@ bool bio_attempt_front_merge(struct request_queue *q, struct request *req,
 	bio->bi_next = req->bio;
 	req->bio = bio;
 
-#ifdef CONFIG_PFK
-	req->__dun = bio->bi_iter.bi_dun;
-#endif
 	req->__sector = bio->bi_iter.bi_sector;
 	req->__data_len += bio->bi_iter.bi_size;
 	req->ioprio = ioprio_best(req->ioprio, bio_prio(bio));
@@ -1874,9 +1827,6 @@ void blk_init_request_from_bio(struct request *req, struct bio *bio)
 	else
 		req->ioprio = IOPRIO_PRIO_VALUE(IOPRIO_CLASS_NONE, 0);
 	req->write_hint = bio->bi_write_hint;
-#ifdef CONFIG_PFK
-	req->__dun = bio->bi_iter.bi_dun;
-#endif
 	blk_rq_bio_prep(req->q, req, bio);
 }
 EXPORT_SYMBOL_GPL(blk_init_request_from_bio);
@@ -2077,8 +2027,7 @@ static inline int blk_partition_remap(struct bio *bio)
 		trace_block_bio_remap(bio->bi_disk->queue, bio, part_devt(p),
 				bio->bi_iter.bi_sector - p->start_sect);
 	} else {
-		printk_ratelimited("%s: fail for partition %d\n",
-			__func__, bio->bi_partno);
+		printk("%s: fail for partition %d\n", __func__, bio->bi_partno);
 		ret = -EIO;
 	}
 	rcu_read_unlock();
@@ -2130,7 +2079,7 @@ generic_make_request_checks(struct bio *bio)
 
 	q = bio->bi_disk->queue;
 	if (unlikely(!q)) {
-		printk_ratelimited(KERN_ERR
+		printk(KERN_ERR
 		       "generic_make_request: Trying to access "
 			"nonexistent block-device %s (%Lu)\n",
 			bio_devname(bio, b), (long long)bio->bi_iter.bi_sector);
@@ -2256,17 +2205,8 @@ blk_qc_t generic_make_request(struct bio *bio)
 	 * yet.
 	 */
 	struct bio_list bio_list_on_stack[2];
-	struct request_queue *q = bio->bi_disk->queue;
 	blk_qc_t ret = BLK_QC_T_NONE;
 
-	if (blk_queue_enter(q, bio->bi_opf & REQ_NOWAIT) < 0) {
-		if (!blk_queue_dying(q) && (bio->bi_opf & REQ_NOWAIT))
-			bio_wouldblock_error(bio);
-		else
-			bio_io_error(bio);
-		return ret;
-	}
-	
 	if (!generic_make_request_checks(bio))
 		goto out;
 
@@ -2303,23 +2243,17 @@ blk_qc_t generic_make_request(struct bio *bio)
 	bio_list_init(&bio_list_on_stack[0]);
 	current->bio_list = bio_list_on_stack;
 	do {
-		bool enter_succeeded = true;
+		struct request_queue *q = bio->bi_disk->queue;
 
-		if (unlikely(q != bio->bi_disk->queue)) {
-			if (q)
-				blk_queue_exit(q);
-			q = bio->bi_disk->queue;
-			if (blk_queue_enter(q, bio->bi_opf & REQ_NOWAIT) < 0)
-				enter_succeeded = false;
-		}
-
-		if (enter_succeeded) {
+		if (likely(blk_queue_enter(q, bio->bi_opf & REQ_NOWAIT) == 0)) {
 			struct bio_list lower, same;
 
 			/* Create a fresh bio_list for all subordinate requests */
 			bio_list_on_stack[1] = bio_list_on_stack[0];
 			bio_list_init(&bio_list_on_stack[0]);
 			ret = q->make_request_fn(q, bio);
+
+			blk_queue_exit(q);
 
 			/* sort new bios into those for a lower level
 			 * and those for the same level
@@ -2341,15 +2275,12 @@ blk_qc_t generic_make_request(struct bio *bio)
 				bio_wouldblock_error(bio);
 			else
 				bio_io_error(bio);
-			q = NULL;
 		}
 		bio = bio_list_pop(&bio_list_on_stack[0]);
 	} while (bio);
 	current->bio_list = NULL; /* deactivate */
 
 out:
-	if (q)
-		blk_queue_exit(q);
 	return ret;
 }
 EXPORT_SYMBOL(generic_make_request);
@@ -2403,7 +2334,8 @@ bool is_critial_process(struct task_struct *t)
 
 bool is_filter_process(struct task_struct *t)
 {
-	if(!strncmp(t->comm,"logcat", TASK_COMM_LEN) )
+    /* yanghao@PSW.Kernel.Stability add queued-work for sync file android main thread will wait 2019-4-13 */
+	if(!strncmp(t->comm,"logcat", TASK_COMM_LEN) || !strncmp(t->comm, "queued-work-loo", TASK_COMM_LEN))
 		 return true;
 
 	return false;
@@ -2453,6 +2385,9 @@ blk_qc_t submit_bio(struct bio *bio)
 			count_vm_events(PGPGIN, count);
 		}
 
+#ifdef CONFIG_MTK_BLOCK_TAG
+		mtk_btag_pidlog_submit_bio(bio);
+#endif
 		if (unlikely(block_dump)) {
 			char b[BDEVNAME_SIZE];
 			printk(KERN_DEBUG "%s(%d): %s block %Lu on %s (%u sectors)\n",
@@ -2745,10 +2680,6 @@ struct request *blk_peek_request(struct request_queue *q)
 			 * not be passed by new incoming requests
 			 */
 			rq->rq_flags |= RQF_STARTED;
-/*Hank.liu@PSW.BSP Kernel IO Latency  2019-03-19,request start ktime */
-#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
-			rq-> block_io_start = ktime_get();
-#endif
 			trace_block_rq_issue(q, rq);
 		}
 
@@ -2804,8 +2735,7 @@ struct request *blk_peek_request(struct request_queue *q)
 			__blk_end_request_all(rq, ret == BLKPREP_INVALID ?
 					BLK_STS_TARGET : BLK_STS_IOERR);
 		} else {
-			printk_ratelimited(KERN_ERR "%s: bad return=%d\n",
-				__func__, ret);
+			printk(KERN_ERR "%s: bad return=%d\n", __func__, ret);
 			break;
 		}
 	}
@@ -2824,8 +2754,7 @@ static void blk_dequeue_request(struct request *rq)
 	list_del_init(&rq->queuelist);
 #ifdef VENDOR_EDIT
 /*Huacai.Zhou@PSW.BSP.Kernel.Performance, 2018-04-28, add foreground task io opt*/
-	if (sysctl_fg_io_opt && (rq->cmd_flags & REQ_FG))
-		list_del_init(&rq->fg_list);
+	list_del_init(&rq->fg_list);
 #endif /*VENDOR_EDIT*/
 
 	/*
@@ -2837,11 +2766,6 @@ static void blk_dequeue_request(struct request *rq)
 		q->in_flight[rq_is_sync(rq)]++;
 		set_io_start_time_ns(rq);
 	}
-#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
-// jiheng.xie@PSW.Tech.BSP.Performance, 2019/03/11
-// Add for ioqueue
-		ohm_ioqueue_add_inflight(q, rq);
-#endif /*VENDOR_EDIT*/
 }
 
 /**
@@ -2922,47 +2846,8 @@ bool blk_update_request(struct request *req, blk_status_t error,
 		unsigned int nr_bytes)
 {
 	int total_bytes;
-  #if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
-/*Hank.liu@TECH.BSP Kernel IO Latency	2019-03-19,request complete ktime*/
-	ktime_t now;
-	u64 delta_us;
-	char rwbs[RWBS_LEN];
-#endif
-  
+
 	trace_block_rq_complete(req, blk_status_to_errno(error), nr_bytes);
-	/*Hank.liu@TECH.BSP Kernel IO Latency	2019-03-19,request complete ktime*/
-#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
-		if(req->tag >= 0 && req->block_io_start > 0)
-		{
-			io_print_flag = false;
-			now = ktime_get();
-			delta_us = ktime_us_delta(now, req->block_io_start);
-			ohm_iolatency_record(req, nr_bytes, current_is_fg(), ktime_us_delta(now, req->block_io_start));
-			trace_block_time(req->q, req, delta_us, nr_bytes);
-			
-			if(delta_us > PRINT_LATENCY) { 
-				if((ktime_to_ms(now)) < COUNT_TIME){
-					latency_count ++;
-				}else{
-					latency_count = 0;
-				}
-				io_print_flag = true;
-				blk_fill_rwbs(rwbs,req->cmd_flags, nr_bytes);
-		
-				/*if log is continuous, printk the first log.*/
-				if(!io_print_count)
-				  pr_info("[IO Latency]UID:%u,slot:%d,outstanding=0x%lx,IO_Type:%s,Block IO/Flash Latency:(%llu/%llu)LBA:%llu,length:%d size:%d,count=%lld\n",
-						(from_kuid_munged(current_user_ns(),current_uid())),
-						req->tag,ufs_outstanding,rwbs,delta_us,req->flash_io_latency,
-						(unsigned long long)blk_rq_pos(req),
-						nr_bytes >> 9,blk_rq_bytes(req),latency_count);
-				io_print_count++;
-			}
-		
-			if(!io_print_flag && io_print_count)
-				io_print_count = 0;
-		}
-#endif
 
 	if (!req->bio)
 		return false;
@@ -3008,13 +2893,8 @@ bool blk_update_request(struct request *req, blk_status_t error,
 	req->__data_len -= total_bytes;
 
 	/* update sector only for requests with clear definition of sector */
-	if (!blk_rq_is_passthrough(req)) {
+	if (!blk_rq_is_passthrough(req))
 		req->__sector += total_bytes >> 9;
-#ifdef CONFIG_PFK
-		if (req->__dun)
-			req->__dun += total_bytes >> 12;
-#endif
-	}
 
 	/* mixed attributes always follow the first bio */
 	if (req->rq_flags & RQF_MIXED_MERGE) {
@@ -3377,9 +3257,6 @@ static void __blk_rq_prep_clone(struct request *dst, struct request *src)
 {
 	dst->cpu = src->cpu;
 	dst->__sector = blk_rq_pos(src);
-#ifdef CONFIG_PFK
-	dst->__dun = blk_rq_dun(src);
-#endif
 	dst->__data_len = blk_rq_bytes(src);
 	if (src->rq_flags & RQF_SPECIAL_PAYLOAD) {
 		dst->rq_flags |= RQF_SPECIAL_PAYLOAD;
@@ -3879,85 +3756,3 @@ int __init blk_dev_init(void)
 
 	return 0;
 }
-
-/*
- * Blk IO latency support. We want this to be as cheap as possible, so doing
- * this lockless (and avoiding atomics), a few off by a few errors in this
- * code is not harmful, and we don't want to do anything that is
- * perf-impactful.
- * TODO : If necessary, we can make the histograms per-cpu and aggregate
- * them when printing them out.
- */
-void
-blk_zero_latency_hist(struct io_latency_state *s)
-{
-	memset(s->latency_y_axis_read, 0,
-	       sizeof(s->latency_y_axis_read));
-	memset(s->latency_y_axis_write, 0,
-	       sizeof(s->latency_y_axis_write));
-	s->latency_reads_elems = 0;
-	s->latency_writes_elems = 0;
-}
-EXPORT_SYMBOL(blk_zero_latency_hist);
-
-ssize_t
-blk_latency_hist_show(struct io_latency_state *s, char *buf)
-{
-	int i;
-	int bytes_written = 0;
-	u_int64_t num_elem, elem;
-	int pct;
-
-	num_elem = s->latency_reads_elems;
-	if (num_elem > 0) {
-		bytes_written += scnprintf(buf + bytes_written,
-			   PAGE_SIZE - bytes_written,
-			   "IO svc_time Read Latency Histogram (n = %llu):\n",
-			   num_elem);
-		for (i = 0;
-		     i < ARRAY_SIZE(latency_x_axis_us);
-		     i++) {
-			elem = s->latency_y_axis_read[i];
-			pct = div64_u64(elem * 100, num_elem);
-			bytes_written += scnprintf(buf + bytes_written,
-						   PAGE_SIZE - bytes_written,
-						   "\t< %5lluus%15llu%15d%%\n",
-						   latency_x_axis_us[i],
-						   elem, pct);
-		}
-		/* Last element in y-axis table is overflow */
-		elem = s->latency_y_axis_read[i];
-		pct = div64_u64(elem * 100, num_elem);
-		bytes_written += scnprintf(buf + bytes_written,
-					   PAGE_SIZE - bytes_written,
-					   "\t> %5dms%15llu%15d%%\n", 10,
-					   elem, pct);
-	}
-	num_elem = s->latency_writes_elems;
-	if (num_elem > 0) {
-		bytes_written += scnprintf(buf + bytes_written,
-			   PAGE_SIZE - bytes_written,
-			   "IO svc_time Write Latency Histogram (n = %llu):\n",
-			   num_elem);
-		for (i = 0;
-		     i < ARRAY_SIZE(latency_x_axis_us);
-		     i++) {
-			elem = s->latency_y_axis_write[i];
-			pct = div64_u64(elem * 100, num_elem);
-			bytes_written += scnprintf(buf + bytes_written,
-						   PAGE_SIZE - bytes_written,
-						   "\t< %5lluus%15llu%15d%%\n",
-						   latency_x_axis_us[i],
-						   elem, pct);
-		}
-		/* Last element in y-axis table is overflow */
-		elem = s->latency_y_axis_write[i];
-		pct = div64_u64(elem * 100, num_elem);
-		bytes_written += scnprintf(buf + bytes_written,
-					   PAGE_SIZE - bytes_written,
-					   "\t> %5dms%15llu%15d%%\n", 10,
-					   elem, pct);
-	}
-	return bytes_written;
-}
-EXPORT_SYMBOL(blk_latency_hist_show);

@@ -16,8 +16,6 @@
 #include <linux/uaccess.h>
 #include <linux/kernel.h>
 #include <linux/kobject.h>
-#include <linux/blkdev.h>
-#include <linux/ratelimit.h>
 #ifdef CONFIG_OPPO_MEM_MONITOR
 #include <linux/memory_monitor.h>
 #endif
@@ -40,62 +38,6 @@ struct sched_stat_para {
         u64 delta_ms;
 };
 
-struct io_latency_para{
-        bool ctrl;
-        bool logon;
-        bool trig;
-
-        int low_thresh_ms;
-        u64 low_cnt;
-
-        int high_thresh_ms;
-        u64 high_cnt;
-
-        u64 total_us;
-        u64 emmc_total_us;
-        u64 total_cnt;
-        u64 fg_low_cnt;
-        u64 fg_high_cnt;
-        u64 fg_total_ms;
-        u64 fg_total_cnt;
-        u64 fg_max_delta_ms;
-        u64 delta_ms;
-
-        //fg
-        u64 iosize_write_count_fg;
-        u64 iosize_write_us_fg;
-        u64 iosize_500ms_syncwrite_count_fg;
-        u64 iosize_200ms_syncwrite_count_fg;
-        u64 iosize_500ms_asyncwrite_count_fg;
-        u64 iosize_200ms_asyncwrite_count_fg;
-        u64 iosize_read_count_fg;
-        u64 iosize_read_us_fg;
-        u64 iosize_500ms_read_count_fg;
-        u64 iosize_200ms_read_count_fg;
-        //bg
-        u64 iosize_write_count_bg;
-        u64 iosize_write_us_bg;
-        u64 iosize_2s_asyncwrite_count_bg;
-        u64 iosize_500ms_asyncwrite_count_bg;
-        u64 iosize_200ms_asyncwrite_count_bg;
-        u64 iosize_2s_syncwrite_count_bg;
-        u64 iosize_500ms_syncwrite_count_bg;
-        u64 iosize_200ms_syncwrite_count_bg;
-        u64 iosize_read_count_bg;
-        u64 iosize_read_us_bg;
-        u64 iosize_2s_read_count_bg;
-        u64 iosize_500ms_read_count_bg;
-        u64 iosize_200ms_read_count_bg;
-
-		  //4k
-        u64 iosize_4k_read_count;
-        u64 iosize_4k_read_us;
-        u64 iosize_4k_write_count;
-        u64 iosize_4k_write_us;
-};
-struct io_latency_para oppo_io_para;
-
-
 struct sched_stat_para oppo_sched_para[OHM_SCHED_TOTAL];
 static char *sched_list[OHM_TYPE_TOTAL] = {
         /* SCHED_STATS 0 -11 */
@@ -103,7 +45,7 @@ static char *sched_list[OHM_TYPE_TOTAL] = {
         "sched_latency",
         "fsync",
         "emmcio",
-        "dstate",
+        "sched_default_04",
         "sched_default_05",
         "sched_default_06",
         "sched_default_07",
@@ -115,19 +57,14 @@ static char *sched_list[OHM_TYPE_TOTAL] = {
         "cur_cpu_load",
         "memory_monitor",
         "io_panic",
-        "svm_monitor",
-        "rlimit_monitor",
-        "ionwait_monitor"
 };
 
 /******  Action  ******/
-#define MAX_OHMEVENT_PARAM 4
-#define OH_MSG_LEN 256
+#define MAX_OHMEVENT_PARAM 3
 static struct kobject *ohm_kobj = NULL;
 static struct work_struct ohm_detect_ws;
 static char *ohm_detect_env[MAX_OHMEVENT_PARAM] = { "OHMACTION=uevent", NULL };
 static bool ohm_action_ctrl = false;
-static char msg_buf[OH_MSG_LEN] = {0};
 
 void ohm_action_trig(int type)
 {
@@ -142,32 +79,7 @@ void ohm_action_trig(int type)
                         return;
                 }
                 sprintf(ohm_detect_env[1], "OHMTYPE=%s", sched_list[type]);
-		ohm_detect_env[MAX_OHMEVENT_PARAM - 2] = NULL;
                 ohm_detect_env[MAX_OHMEVENT_PARAM - 1] = NULL;
-                schedule_work(&ohm_detect_ws);
-        }
-}
-
-void ohm_action_trig_with_msg(int type, char *msg)
-{
-	int len;
-
-        if (!ohm_action_ctrl) {
-                ohm_err("ctrl off\n");
-                return;
-        }
-
-	if (!ohm_kobj) {
-                ohm_err("kobj NULL\n");
-                return;
-        }
-
-        if (OHM_SVM_MON == type || OHM_RLIMIT_MON == type) {
-                sprintf(ohm_detect_env[1], "OHMTYPE=%s", sched_list[type]);
-		len = snprintf(msg_buf, OH_MSG_LEN-1, "OHMMSG=%s", msg);
-		msg_buf[len] = '\0';
-		ohm_detect_env[MAX_OHMEVENT_PARAM - 2] = msg_buf;
-		ohm_detect_env[MAX_OHMEVENT_PARAM - 1] = NULL;
                 schedule_work(&ohm_detect_ws);
         }
 }
@@ -182,7 +94,7 @@ void ohm_detect_work(struct work_struct *work)
 void ohm_action_init(void)
 {
         int i = 0;
-        for(i = 1; i < MAX_OHMEVENT_PARAM - 2; i++) {
+        for(i = 1; i < MAX_OHMEVENT_PARAM - 1; i++) {
                 ohm_detect_env[i] = kzalloc(50, GFP_KERNEL);
                 if (!ohm_detect_env[i]) {
                         ohm_err("kzalloc ohm uevent param failed\n");
@@ -223,10 +135,9 @@ void ohm_schedstats_record(int sched_type, int fg, u64 delta_ms)
         }
 
         if (delta_ms >= oppo_sched_para[sched_type].high_thresh_ms) {
-			 	static DEFINE_RATELIMIT_STATE(ratelimit, 60*HZ, 1);
                 oppo_sched_para[sched_type].high_cnt++;
 
-                if (oppo_sched_para[sched_type].logon && __ratelimit(&ratelimit)) {
+                if (oppo_sched_para[sched_type].logon) {
                         ohm_debug_deferred("[%s / %s] high_cnt, delay = %llu ms\n",
                                 sched_list[sched_type], (fg ? "fg":"bg"), delta_ms);
                 }
@@ -248,140 +159,6 @@ void ohm_schedstats_record(int sched_type, int fg, u64 delta_ms)
 
         return;
 }
-
-/******  Flash IO Latency record  ******/
-void ohm_iolatency_record(struct request *req, unsigned int nr_bytes, int fg, u64 delta_us)
-{
-        u64 delta_ms = delta_us/1000;
-
-        if (!oppo_io_para.ctrl)
-                return;
-        if (!req)
-                return;
-        if (fg) {
-                oppo_io_para.fg_total_ms += delta_ms;
-                oppo_io_para.fg_total_cnt++;
-                if (delta_ms > oppo_io_para.fg_max_delta_ms) {
-                        oppo_io_para.fg_max_delta_ms = delta_ms;
-                }
-        }
-
-        if (delta_ms >= oppo_io_para.high_thresh_ms) {
-                oppo_io_para.high_cnt++;
-
-                if (oppo_io_para.logon) {
-                        ohm_debug("[io latency / %s] high_cnt, delay = %llu ms\n",
-                                (fg ? "fg":"bg"), delta_ms);
-                }
-                if (fg) {
-                                oppo_io_para.fg_high_cnt++;
-                                if (oppo_io_para.trig)
-                                      ohm_action_trig(OHM_SCHED_EMMCIO);
-                          }
-        } else if (delta_ms >= oppo_io_para.low_thresh_ms) {
-                oppo_io_para.low_cnt++;
-                if (fg) {
-                        oppo_io_para.fg_low_cnt++;
-                }
-        }
-
-		if(fg){
-	        if((req_op(req)!=REQ_OP_DISCARD)&&(req_op(req)!= REQ_OP_SECURE_ERASE)){
-                if(req_op(req) == REQ_OP_WRITE || req_op(req) == REQ_OP_WRITE_SAME){
-                  oppo_io_para.iosize_write_count_fg++;
-				  oppo_io_para.iosize_write_us_fg += delta_us;
-				  if(rq_is_sync(req)){
-                      if( delta_ms > 500 ){
-                        oppo_io_para.iosize_500ms_syncwrite_count_fg ++;
-				      }else if( delta_ms > 200 ){
-                        oppo_io_para.iosize_200ms_syncwrite_count_fg ++;
-				      }
-				  }else{
-					  if( delta_ms > 500 ){
-					    oppo_io_para.iosize_500ms_asyncwrite_count_fg ++;
-				      }else if( delta_ms > 200 ){
-						oppo_io_para.iosize_200ms_asyncwrite_count_fg ++;
-					  } 
-				  }
-
-                }else{
-                  oppo_io_para.iosize_read_count_fg++;
-				  oppo_io_para.iosize_read_us_fg += delta_us;
-				  if( delta_ms > 500 ){
-                     oppo_io_para.iosize_500ms_read_count_fg ++;
-				  }else if( delta_ms > 200 ){
-                     oppo_io_para.iosize_200ms_read_count_fg ++;
-				  }
-                }
-			}      
-		}else{
-			if((req_op(req)!=REQ_OP_DISCARD)&&(req_op(req)!= REQ_OP_SECURE_ERASE)){
-                if(req_op(req) == REQ_OP_WRITE || req_op(req) == REQ_OP_WRITE_SAME){
-                  oppo_io_para.iosize_write_count_bg++;
-				  oppo_io_para.iosize_write_us_bg += delta_us;
-				  if(rq_is_sync(req)){
-					  if( delta_ms > 2000 )
-					  {
-                      oppo_io_para.iosize_2s_syncwrite_count_bg ++;
-						if (oppo_io_para.trig)
-	                            ohm_action_trig(OHM_SCHED_EMMCIO);
-					  }else if( delta_ms > 500 ){
-	                     oppo_io_para.iosize_500ms_syncwrite_count_bg ++;
-					  }else if( delta_ms > 200 ){
-	                     oppo_io_para.iosize_200ms_syncwrite_count_bg ++;
-					  }
-				  }else{
-					  if( delta_ms > 2000 )
-					 {
-						oppo_io_para.iosize_2s_asyncwrite_count_bg ++;
-						if (oppo_io_para.trig)
-								ohm_action_trig(OHM_SCHED_EMMCIO);
-						}else if( delta_ms > 500 ){
-					       oppo_io_para.iosize_500ms_asyncwrite_count_bg ++;
-						}else if( delta_ms > 200 ){
-						   oppo_io_para.iosize_200ms_asyncwrite_count_bg ++;
-						}
-				  }
-                }else{
-                  oppo_io_para.iosize_read_count_bg++;
-				  oppo_io_para.iosize_read_us_bg += delta_us;
-				  if( delta_ms > 2000 )
-				  {
-                    oppo_io_para.iosize_2s_read_count_bg ++;
-					if (oppo_io_para.trig)
-                            ohm_action_trig(OHM_SCHED_EMMCIO);
-				  }else if( delta_ms > 500 ){
-                     oppo_io_para.iosize_500ms_read_count_bg ++;
-				  }else if( delta_ms > 200 ){
-                     oppo_io_para.iosize_200ms_read_count_bg ++;
-				  }
-            }
-			}
-
-		  }
-        //4k
-        if((req_op(req)!=REQ_OP_DISCARD)&&(req_op(req)!= REQ_OP_SECURE_ERASE)){
-            if(req_op(req) == REQ_OP_WRITE || req_op(req) == REQ_OP_WRITE_SAME){
-               if( blk_rq_bytes(req) == 4096){
-                  oppo_io_para.iosize_4k_write_count++;
-                  oppo_io_para.iosize_4k_write_us += delta_us;
-               }
-            }
-            else{
-              if( blk_rq_bytes(req) == 4096){
-                 oppo_io_para.iosize_4k_read_count++;
-                 oppo_io_para.iosize_4k_read_us += delta_us;
-              }
-            }
-        }
-        oppo_io_para.delta_ms = delta_ms;
-        oppo_io_para.total_us += delta_us;
-        oppo_io_para.emmc_total_us += req->flash_io_latency;
-        oppo_io_para.total_cnt++;
-
-        return;
-}
-
 
 /****  Ctrl init  ****/
 /*
@@ -416,14 +193,10 @@ mem mon;
 #define OHM_CTRL_SCHEDLATENCY   BIT(OHM_SCHED_SCHEDLATENCY)
 #define OHM_CTRL_FSYNC          BIT(OHM_SCHED_FSYNC)
 #define OHM_CTRL_EMMCIO         BIT(OHM_SCHED_EMMCIO)
-#define OHM_CTRL_DSTATE         BIT(OHM_SCHED_DSTATE)
-#define OHM_CTRL_SCHEDTOTAL     OHM_CTRL_EMMCIO | OHM_CTRL_FSYNC | OHM_CTRL_SCHEDLATENCY | OHM_CTRL_IOWAIT | OHM_CTRL_DSTATE
+#define OHM_CTRL_SCHEDTOTAL     OHM_CTRL_EMMCIO | OHM_CTRL_FSYNC | OHM_CTRL_SCHEDLATENCY | OHM_CTRL_IOWAIT 
 #define OHM_CTRL_CPU_CUR        BIT(OHM_CPU_LOAD_CUR)
 #define OHM_CTRL_MEMMON         BIT(OHM_MEM_MON)
 #define OHM_CTRL_IOPANIC_MON    BIT(OHM_IOPANIC_MON)
-#define OHM_CTRL_SVM			BIT(OHM_SVM_MON)
-#define OHM_CTRL_RLIMIT			BIT(OHM_RLIMIT_MON)
-#define OHM_CTRL_IONMON         BIT(OHM_ION_MON)
 
 
 /*
@@ -433,7 +206,7 @@ ohm_trig_list    = 0x5a002000
 */
 
 /*Default*/
-static int ohm_ctrl_list = OHM_LIST_MAGIC | OHM_CTRL_CPU_CUR | OHM_CTRL_MEMMON |  OHM_CTRL_IONMON | OHM_CTRL_SCHEDTOTAL;
+static int ohm_ctrl_list = OHM_LIST_MAGIC | OHM_CTRL_CPU_CUR | OHM_CTRL_MEMMON | OHM_CTRL_SCHEDTOTAL;
 static int ohm_logon_list = OHM_LIST_MAGIC;
 static int ohm_trig_list = OHM_LIST_MAGIC;
 
@@ -448,10 +221,6 @@ bool ohm_memmon_trig = false;
 bool ohm_iopanic_mon_ctrl = true;
 bool ohm_iopanic_mon_logon = false;
 bool ohm_iopanic_mon_trig = false;
-
-bool ohm_ionmon_ctrl = true;
-bool ohm_ionmon_logon = false;
-bool ohm_ionmon_trig = false;
 
 /******  Para Update  *****/
 #define LOW_THRESH_MS_DEFAULT   100
@@ -473,7 +242,6 @@ struct thresh_para ohm_thresh_para[OHM_SCHED_TOTAL] = {
         { LOW_THRESH_MS_DEFAULT, HIGH_THRESH_MS_DEFAULT},
         { LOW_THRESH_MS_DEFAULT, HIGH_THRESH_MS_DEFAULT},
         { 100, 200},
-        { LOW_THRESH_MS_DEFAULT, HIGH_THRESH_MS_DEFAULT},
 };
 
 void ohm_para_update(void)
@@ -504,11 +272,8 @@ void ohm_trig_init(void)
         ohm_memmon_trig = (ohm_trig_list & OHM_CTRL_MEMMON) ? true : false;
         ohm_cpu_trig = (ohm_trig_list & OHM_CTRL_CPU_CUR) ? true : false;
         ohm_iopanic_mon_trig = (ohm_trig_list & OHM_CTRL_IOPANIC_MON) ? true : false;
-		ohm_ionmon_trig = (ohm_trig_list & OHM_CTRL_IONMON) ? true : false;
         for (i = 0 ;i < OHM_SCHED_TOTAL ;i++ ) {
                 oppo_sched_para[i].trig = (ohm_trig_list & BIT(i)) ? true : false;
-                if(i == OHM_SCHED_EMMCIO )
-                 oppo_io_para.trig = (ohm_trig_list & BIT(i)) ? true : false;
         }
         return;
 }
@@ -519,11 +284,8 @@ void ohm_logon_init(void)
         ohm_cpu_logon = (ohm_logon_list & OHM_CTRL_CPU_CUR) ? true : false;
         ohm_memmon_logon = (ohm_logon_list & OHM_CTRL_MEMMON) ? true : false;
         ohm_iopanic_mon_logon = (ohm_logon_list & OHM_CTRL_IOPANIC_MON) ? true : false;
-		ohm_ionmon_logon = (ohm_logon_list & OHM_CTRL_IONMON) ? true : false;
         for (i = 0 ;i < OHM_SCHED_TOTAL ;i++ ) {
                 oppo_sched_para[i].logon = (ohm_logon_list & BIT(i)) ? true : false;
-                if(i == OHM_SCHED_EMMCIO )
-                  oppo_io_para.logon = (ohm_logon_list & BIT(i)) ? true : false;
         }
         return;
 }
@@ -534,11 +296,8 @@ void ohm_ctrl_init(void)
         ohm_cpu_ctrl = (ohm_ctrl_list & OHM_CTRL_CPU_CUR) ? true : false;
         ohm_memmon_ctrl = (ohm_ctrl_list & OHM_CTRL_MEMMON) ? true : false;
         ohm_iopanic_mon_ctrl = (ohm_ctrl_list & OHM_CTRL_IOPANIC_MON) ? true : false;
-		ohm_ionmon_ctrl = (ohm_ctrl_list & OHM_CTRL_IONMON) ? true : false;
         for (i = 0 ;i < OHM_SCHED_TOTAL ;i++ ) {
                 oppo_sched_para[i].ctrl = (ohm_ctrl_list & BIT(i)) ? true : false;
-                if(i == OHM_SCHED_EMMCIO )
-                  oppo_io_para.ctrl = (ohm_ctrl_list & BIT(i)) ? true : false;
         }
         return;
 }
@@ -553,8 +312,6 @@ void ohm_para_init(void)
         }
         oppo_sched_para[OHM_SCHED_EMMCIO].low_thresh_ms = 100;
         oppo_sched_para[OHM_SCHED_EMMCIO].high_thresh_ms = 200;
-		  oppo_io_para.low_thresh_ms = 100;
-        oppo_io_para.high_thresh_ms = 200;
         ohm_ctrl_init();
         ohm_logon_init();
         ohm_trig_init();
@@ -733,147 +490,17 @@ static const struct file_operations proc_fsync_wait_fops = {
 int ohm_flash_type = OHM_FLASH_TYPE_UFS;
 static ssize_t emmcio_read(struct file *filp, char __user *buff, size_t count, loff_t *off)
 {
-      int len = 0;
-      char *page = kzalloc(2048,GFP_KERNEL);
-      if (!page)
-        return -ENOMEM;
-      //int type = OHM_SCHED_EMMCIO;
-      len = sprintf(page, "emcdrv_iowait_low_thresh_ms: %d\n" //low thresh parameter
-                            "emcdrv_iowait_low_cnt: %lld\n"
-                            //high thresh parameter
-                            "emcdrv_iowait_high_thresh_ms: %d\n"
-                            "emcdrv_iowait_high_cnt: %lld\n"
-                            //total parameter
-                            "emcdrv_iowait_total_ms: %lld\n"
-                            "flashio_total_latency: %lld\n"
-                            "blockio_total_latency: %lld\n"
-                            "emcdrv_iowait_total_cnt: %lld\n"
-                            //fg latency parameter
-                            "emcdrv_iowait_fg_low_cnt: %lld\n"
-                            "emcdrv_iowait_fg_high_cnt: %lld\n"
-                            "emcdrv_iowait_fg_total_ms: %lld\n"
-                            "emcdrv_iowait_fg_total_cnt: %lld\n"
-                            "emcdrv_iowait_fg_max_ms: %lld\n"
-                            "emcdrv_iowait_delta_ms: %lld\n"
-                            // fg
-                            "iosize_write_count_fg: %lld\n"
-                            "iosize_write_us_fg: %lld\n"
-                            "iosize_500ms_syncwrite_count_fg: %lld\n"
-                            "iosize_200ms_syncwrite_count_fg: %lld\n"
-                            "iosize_500ms_asyncwrite_count_fg: %lld\n"
-                            "iosize_200ms_asyncwrite_count_fg: %lld\n"
-                            "iosize_read_count_fg: %lld\n"
-                            "iosize_read_us_fg: %lld\n"
-                            "iosize_500ms_read_count_fg: %lld\n"
-                            "iosize_200ms_read_count_fg: %lld\n"
-                            //bg
-                            "iosize_write_count_bg: %lld\n"
-                            "iosize_write_us_bg: %lld\n"
-                            "iosize_2s_asyncwrite_count_bg: %lld\n"
-                            "iosize_500ms_asyncwrite_count_bg: %lld\n"
-                            "iosize_200ms_asyncwrite_count_bg: %lld\n"
-                            "iosize_2s_syncwrite_count_bg: %lld\n"
-                            "iosize_500ms_syncwrite_count_bg: %lld\n"
-                            "iosize_200ms_syncwrite_count_bg: %lld\n"
-                            "iosize_read_count_bg: %lld\n"
-                            "iosize_read_us_bg: %lld\n"
-                            "iosize_2s_read_count_bg: %lld\n"
-                            "iosize_500ms_read_count_bg: %lld\n"
-                            "iosize_200ms_read_count_bg: %lld\n"
-                            //4k
-                            "iosize_4k_read_count: %lld\n"
-                            "iosize_4k_read_ms: %lld\n"
-                            "iosize_4k_write_count: %lld\n"
-                            "iosize_4k_write_ms: %lld\n"
-                            // option
-                            "emcdrv_iowait_ctrl: %s\n"
-                            "emcdrv_iowait_logon: %s\n"
-                            "emcdrv_iowait_trig: %s\n",
-                            oppo_io_para.low_thresh_ms, //low thresh parameter
-                            oppo_io_para.low_cnt,
-                            //high thresh parameter
-                            oppo_io_para.high_thresh_ms,
-                            oppo_io_para.high_cnt,
-                            //total parameter
-                            (oppo_io_para.total_us/1000),
-                            (oppo_io_para.emmc_total_us/1000),
-                            (oppo_io_para.total_us - oppo_io_para.emmc_total_us)/1000,
-                            oppo_io_para.total_cnt,
-                            //fg latency parameter
-                            oppo_io_para.fg_low_cnt,
-                            oppo_io_para.fg_high_cnt,
-                            oppo_io_para.fg_total_ms,
-                            oppo_io_para.fg_total_cnt,
-                            oppo_io_para.fg_max_delta_ms,
-                            oppo_io_para.delta_ms,
-                            //fg
-                            oppo_io_para.iosize_write_count_fg,
-                            oppo_io_para.iosize_write_us_fg,
-                            oppo_io_para.iosize_500ms_syncwrite_count_fg,
-                            oppo_io_para.iosize_200ms_syncwrite_count_fg,
-                            oppo_io_para.iosize_500ms_asyncwrite_count_fg,
-                            oppo_io_para.iosize_200ms_asyncwrite_count_fg,
-                            oppo_io_para.iosize_read_count_fg,
-                            oppo_io_para.iosize_read_us_fg,
-                            oppo_io_para.iosize_500ms_read_count_fg,
-                            oppo_io_para.iosize_200ms_read_count_fg,
-                            //bg
-                            oppo_io_para.iosize_write_count_bg,
-                            oppo_io_para.iosize_write_us_bg,
-                            oppo_io_para.iosize_2s_asyncwrite_count_bg,
-                            oppo_io_para.iosize_500ms_asyncwrite_count_bg,
-                            oppo_io_para.iosize_200ms_asyncwrite_count_bg,
-                            oppo_io_para.iosize_2s_syncwrite_count_bg,
-                            oppo_io_para.iosize_500ms_syncwrite_count_bg,
-                            oppo_io_para.iosize_200ms_syncwrite_count_bg,
-                            oppo_io_para.iosize_read_count_bg,
-                            oppo_io_para.iosize_read_us_bg,
-                            oppo_io_para.iosize_2s_read_count_bg,
-                            oppo_io_para.iosize_500ms_read_count_bg,
-                            oppo_io_para.iosize_200ms_read_count_bg,
-                            //4k
-                            oppo_io_para.iosize_4k_read_count,
-                            (oppo_io_para.iosize_4k_read_us/1000),
-                            oppo_io_para.iosize_4k_write_count,
-                            (oppo_io_para.iosize_4k_write_us/1000),
-                            // option
-                            oppo_io_para.ctrl ? "true":"false",
-                            oppo_io_para.logon ? "true":"false",
-                            oppo_io_para.trig ? "true":"false");
-
-        if (len > *off) {
-                len -= *off;
-        } else {
-                len = 0;
-        }
-        if (copy_to_user(buff, page, (len < count ? len : count))) {
-              kfree(page);
-              return -EFAULT;
-        }
-        kfree(page);
-        *off += len < count ? len : count;
-        return (len < count ? len : count);
-}
-
-
-static const struct file_operations proc_emmcio_fops = {
-       .read = emmcio_read,
-};
-
-/****** dstat statistics  ******/
-static ssize_t dstate_read(struct file *filp, char __user *buff, size_t count, loff_t *off)
-{
         char page[1024] = {0};
         int len = 0;
-        int type = OHM_SCHED_DSTATE;
+        int type = OHM_SCHED_EMMCIO;
 
-        len = sprintf(page, "dstate_low_thresh_ms: %d\n""dstate_high_thresh_ms: %d\n"
-                "dstate_low_cnt: %lld\n""dstate_high_cnt: %lld\n"
-                "dstate_total_ms: %lld\n""dstate_total_cnt: %lld\n"
-                "dstate_fg_low_cnt: %lld\n""dstate_fg_high_cnt: %lld\n"
-                "dstate_fg_total_ms: %lld\n""dstate_fg_total_cnt: %lld\n"
-                "dstate_fg_max_ms: %lld\n""dstate_delta_ms: %lld\n"
-                "dstate_ctrl: %s\n""dstate_logon: %s\n""dstate_trig: %s\n",
+        len = sprintf(page, "emcdrv_iowait_low_thresh_ms: %d\n""emcdrv_iowait_high_thresh_ms: %d\n"
+                "emcdrv_iowait_low_cnt: %lld\n""emcdrv_iowait_high_cnt: %lld\n"
+                "emcdrv_iowait_total_ms: %lld\n""emcdrv_iowait_total_cnt: %lld\n"
+                "emcdrv_iowait_fg_low_cnt: %lld\n""emcdrv_iowait_fg_high_cnt: %lld\n"
+                "emcdrv_iowait_fg_total_ms: %lld\n""emcdrv_iowait_fg_total_cnt: %lld\n"
+                "emcdrv_iowait_fg_max_ms: %lld\n""emcdrv_iowait_delta_ms: %lld\n"
+                "emcdrv_iowait_ctrl: %s\n""emcdrv_iowait_logon: %s\n""emcdrv_iowait_trig: %s\n",
                 oppo_sched_para[type].low_thresh_ms,
                 oppo_sched_para[type].high_thresh_ms,
                 oppo_sched_para[type].low_cnt,
@@ -890,7 +517,6 @@ static ssize_t dstate_read(struct file *filp, char __user *buff, size_t count, l
                 oppo_sched_para[type].logon ? "true":"false",
                 oppo_sched_para[type].trig ? "true":"false");
 
-
         if (len > *off) {
                 len -= *off;
         } else {
@@ -903,9 +529,8 @@ static ssize_t dstate_read(struct file *filp, char __user *buff, size_t count, l
         return (len < count ? len : count);
 }
 
-static const struct file_operations proc_dstate_fops = {
-       .read = dstate_read,
-
+static const struct file_operations proc_emmcio_fops = {
+       .read = emmcio_read,
 };
 
 /******  mem monitor read  ******/
@@ -943,36 +568,6 @@ static const struct file_operations proc_alloc_wait_fops = {
 };
 #endif /*CONFIG_OPPO_MEM_MONITOR*/
 
-static ssize_t ion_wait_read(struct file *filp, char __user *buff, size_t count, loff_t *off)
-{
-        char page[1024] = {0};
-        int len = 0;
-
-        len = sprintf(page, "total_ion_wait_h_cnt: %lld\n""total_ion_wait_l_cnt: %lld\n"
-                "fg_ion_wait_h_cnt: %lld\n""fg_ion_wait_l_cnt: %lld\n"
-                "total_ion_wait_max_ms: %lld\n"
-                "ion_wait_ctrl: %s\n""ion_wait_logon: %s\n""ion_wait_trig: %s\n",
-                ionwait_para.total_ion_wait_h_cnt,ionwait_para.total_ion_wait_l_cnt,
-                ionwait_para.fg_ion_wait_h_cnt,ionwait_para.fg_ion_wait_l_cnt,
-                ionwait_para.total_ion_wait_max_ms,
-                ohm_ionmon_ctrl ? "true":"false", ohm_ionmon_logon ? "true":"false", ohm_ionmon_trig ? "true":"false");
-
-        if (len > *off) {
-                len -= *off;
-        } else {
-                len = 0;
-        }
-        if (copy_to_user(buff, page, (len < count ? len : count))) {
-                return -EFAULT;
-        }
-        *off += len < count ? len : count;
-        return (len < count ? len : count);
-}
-
-static const struct file_operations proc_ion_wait_fops = {
-       .read = ion_wait_read,
-};
-
 /******  Proc para   ******/
 static ssize_t ohm_para_read(struct file *filp, char __user *buff, size_t count, loff_t *off)
 {
@@ -998,7 +593,10 @@ static ssize_t ohm_para_write(struct file *file, const char __user *buff, size_t
 {
         char write_data[32] = {0};
         char ctrl_list[32] = {0};
-	int action_ctrl;
+        int action_ctrl;
+
+	if(len > 31)
+		return -EFAULT;
 
         if (copy_from_user(&write_data, buff, len)) {
                 ohm_err("write error.\n");
@@ -1038,7 +636,7 @@ static ssize_t ohm_para_write(struct file *file, const char __user *buff, size_t
         }
         ohm_debug("write: %s, set: %s, ctrl: 0x%08x, logon: 0x%08x, trig: 0x%08x\n",
                 write_data, ctrl_list, ohm_ctrl_list, ohm_logon_list, ohm_trig_list);
-	return len;
+        return len;
 }
 
 static const struct file_operations proc_para_fops = {
@@ -1078,7 +676,7 @@ static const struct file_operations proc_iowait_hung_fops = {
 /******  stuck info read  ******/
 // Liujie.Xie@TECH.Kernel.Sched, 2019/08/29, add for stuck monitor
 /* warning: different project with different setting of LTT_NUM (small core number) */
-#define LTT_NUM (4)
+#define LTT_NUM (5)
 void update_stuck_trace_info(struct task_struct *tsk, int trace_type, unsigned int cpu, u64 delta) {
     if (!tsk->stuck_trace) {
         return;
@@ -1118,6 +716,45 @@ void update_stuck_trace_info(struct task_struct *tsk, int trace_type, unsigned i
         }
     }
 }
+
+/******  cpu info show  ******/
+extern unsigned int cpufreq_quick_get_max(unsigned int cpu);
+static ssize_t cpu_info_read(struct file *filp, char __user *buff, size_t count, loff_t *off)
+{
+    char page[1024] = {0};
+    int len = 0;
+    unsigned int cpu;
+    unsigned long scale_capacity = 0, last_capacity = 0;
+
+    for_each_possible_cpu(cpu) {
+        scale_capacity = arch_scale_cpu_capacity(NULL, cpu);
+        if (scale_capacity == last_capacity) {
+            continue;
+        }
+        last_capacity = scale_capacity;
+        len += snprintf(page + len, sizeof(page) - len, "%u ", cpufreq_quick_get_max(cpu));
+    }
+
+    if (len > 0) {
+        len += snprintf(page + len, sizeof(page) - len, "\n");
+    }
+
+    if (len > *off) {
+            len -= *off;
+    } else {
+            len = 0;
+    }
+    if (copy_to_user(buff, page, (len < count ? len : count))) {
+            return -EFAULT;
+    }
+    *off += len < count ? len : count;
+    return (len < count ? len : count);
+}
+
+static const struct file_operations proc_cpu_info_fops = {
+       .read = cpu_info_read,
+};
+
 /******  End  ******/
 
 #define HEALTHINFO_PROC_NODE "oppo_healthinfo"
@@ -1138,7 +775,7 @@ static int __init oppo_healthinfo_init(void)
 /******  ctrl  *****/
 	pentry = proc_create("para_update", S_IRUGO | S_IWUGO, oppo_healthinfo, &proc_para_fops);
         if(!pentry) {
-                ohm_err("create para_update proc failed.\n");
+                ohm_err("create healthinfo_switch proc failed.\n");
                 goto ERROR_INIT_VERSION;
         }
 
@@ -1172,22 +809,10 @@ static int __init oppo_healthinfo_init(void)
 		ohm_err("create emmc_driver_io_wait proc failed.\n");
 		goto ERROR_INIT_VERSION;
 	}
-	
-	pentry = proc_create("dstate", S_IRUGO, oppo_healthinfo, &proc_dstate_fops);
-	if(!pentry) {
-		ohm_err("create dstate proc failed.\n");
-		goto ERROR_INIT_VERSION;
-	}
 
 	pentry = proc_create("iowait_hung", S_IRUGO, oppo_healthinfo, &proc_iowait_hung_fops);
 	if(!pentry) {
 		ohm_err("create iowait_hung proc failed.\n");
-		goto ERROR_INIT_VERSION;
-	}
-	
-	pentry = proc_create("ion_wait", S_IRUGO, oppo_healthinfo, &proc_ion_wait_fops);
-	if(!pentry) {
-		ohm_err("create ion_wait proc failed.\n");
 		goto ERROR_INIT_VERSION;
 	}
 
@@ -1199,6 +824,13 @@ static int __init oppo_healthinfo_init(void)
 	}
 
 #endif /*CONFIG_OPPO_MEM_MONITOR*/
+
+
+    pentry = proc_create("cpu_info", S_IRUGO, oppo_healthinfo, &proc_cpu_info_fops);
+    if(!pentry) {
+        ohm_err("create cpu info proc failed.\n");
+        goto ERROR_INIT_VERSION;
+    }
         ohm_debug("Success \n");
 	return ret;
 

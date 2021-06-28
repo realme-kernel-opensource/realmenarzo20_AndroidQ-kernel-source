@@ -42,9 +42,9 @@ struct rw_semaphore {
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lockdep_map	dep_map;
 #endif
-#ifdef CONFIG_RWSEM_PRIO_AWARE
-	/* count for waiters preempt to queue in wait list */
-	long m_count;
+#ifdef VENDOR_EDIT
+// Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
+    struct task_struct *ux_dep_task;
 #endif
 };
 
@@ -61,6 +61,10 @@ extern struct rw_semaphore *rwsem_down_write_failed_killable(struct rw_semaphore
 extern struct rw_semaphore *rwsem_wake(struct rw_semaphore *);
 extern struct rw_semaphore *rwsem_downgrade_wake(struct rw_semaphore *sem);
 
+#ifdef VENDOR_EDIT
+// Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
+#include <linux/oppocfs/oppo_cfs_rwsem.h>
+#endif
 
 /* Include the arch specific part */
 #include <asm/rwsem.h>
@@ -93,15 +97,14 @@ static inline int rwsem_is_wlocked(struct rw_semaphore *sem)
 #endif
 
 #ifdef CONFIG_RWSEM_SPIN_ON_OWNER
+#ifdef VENDOR_EDIT
+// Liujie.Xie@TECH.Kernel.Sched, 2019/05/22, add for ui first
+#define __RWSEM_OPT_INIT(lockname) , .osq = OSQ_LOCK_UNLOCKED, .owner = NULL, .ux_dep_task = NULL
+#else /* VENDOR_EDIT */
 #define __RWSEM_OPT_INIT(lockname) , .osq = OSQ_LOCK_UNLOCKED, .owner = NULL
+#endif
 #else
 #define __RWSEM_OPT_INIT(lockname)
-#endif
-
-#ifdef CONFIG_RWSEM_PRIO_AWARE
-#define __RWSEM_PRIO_AWARE_INIT(lockname)	.m_count = 0
-#else
-#define __RWSEM_PRIO_AWARE_INIT(lockname)
 #endif
 
 #define __RWSEM_INITIALIZER(name)				\
@@ -109,8 +112,7 @@ static inline int rwsem_is_wlocked(struct rw_semaphore *sem)
 	  .wait_list = LIST_HEAD_INIT((name).wait_list),	\
 	  .wait_lock = __RAW_SPIN_LOCK_UNLOCKED(name.wait_lock)	\
 	  __RWSEM_OPT_INIT(name)				\
-	  __RWSEM_DEP_MAP_INIT(name),				\
-	  __RWSEM_PRIO_AWARE_INIT(name) }
+	  __RWSEM_DEP_MAP_INIT(name) }
 
 #define DECLARE_RWSEM(name) \
 	struct rw_semaphore name = __RWSEM_INITIALIZER(name)

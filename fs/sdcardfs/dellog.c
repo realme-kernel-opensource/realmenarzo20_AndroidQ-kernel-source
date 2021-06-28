@@ -145,7 +145,7 @@ static int __init dellog_init(void)
 }
 module_init(dellog_init);
 
-#define CONFIG_DELBUF_SHIFT 18 /*256KB*/
+#define CONFIG_DELBUF_SHIFT 19 /*512KB*/
 
 struct delbuf {
 	u16 len;

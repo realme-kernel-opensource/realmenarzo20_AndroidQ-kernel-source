@@ -43,11 +43,8 @@
 #include <asm/system_misc.h>
 #include <asm/pgtable.h>
 #include <asm/tlbflush.h>
-#include <soc/qcom/scm.h>
 
 #include <acpi/ghes.h>
-#include <soc/qcom/scm.h>
-#include <trace/events/exception.h>
 
 struct fault_info {
 	int	(*fn)(unsigned long addr, unsigned int esr,
@@ -57,7 +54,7 @@ struct fault_info {
 	const char *name;
 };
 
-static const struct fault_info fault_info[];
+static struct fault_info fault_info[];
 
 static inline const struct fault_info *esr_to_fault_info(unsigned int esr)
 {
@@ -124,7 +121,6 @@ static void mem_abort_decode(unsigned int esr)
 	pr_alert("  EA = %lu, S1PTW = %lu\n",
 		 (esr & ESR_ELx_EA) >> ESR_ELx_EA_SHIFT,
 		 (esr & ESR_ELx_S1PTW) >> ESR_ELx_S1PTW_SHIFT);
-	pr_alert("  FSC = %u\n", (esr & ESR_ELx_FSC));
 
 	if (esr_is_data_abort(esr))
 		data_abort_decode(esr);
@@ -307,8 +303,6 @@ static void __do_user_fault(struct task_struct *tsk, unsigned long addr,
 	const struct fault_info *inf;
 	unsigned int lsb = 0;
 
-	trace_user_fault(tsk, addr, esr);
-
 	if (unhandled_signal(tsk, sig) && show_unhandled_signals_ratelimited()) {
 		inf = esr_to_fault_info(esr);
 		pr_info("%s[%d]: unhandled %s (%d) at 0x%08lx, esr 0x%03x",
@@ -358,12 +352,14 @@ static void do_bad_area(unsigned long addr, unsigned int esr, struct pt_regs *re
 #define VM_FAULT_BADMAP		0x010000
 #define VM_FAULT_BADACCESS	0x020000
 
-static int __do_page_fault(struct vm_area_struct *vma, unsigned long addr,
+static int __do_page_fault(struct mm_struct *mm, unsigned long addr,
 			   unsigned int mm_flags, unsigned long vm_flags,
 			   struct task_struct *tsk)
 {
+	struct vm_area_struct *vma;
 	int fault;
 
+	vma = find_vma(mm, addr);
 	fault = VM_FAULT_BADMAP;
 	if (unlikely(!vma))
 		goto out;
@@ -406,7 +402,6 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	int fault, sig, code, major = 0;
 	unsigned long vm_flags = VM_READ | VM_WRITE;
 	unsigned int mm_flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
-	struct vm_area_struct *vma = NULL;
 
 	if (notify_page_fault(regs, esr))
 		return 0;
@@ -449,7 +444,7 @@ static int __kprobes do_page_fault(unsigned long addr, unsigned int esr,
 	 * let's try a speculative page fault without grabbing the
 	 * mmap_sem.
 	 */
-	fault = handle_speculative_fault(mm, addr, mm_flags, &vma);
+	fault = handle_speculative_fault(mm, addr, mm_flags, vm_flags);
 	if (fault != VM_FAULT_RETRY)
 		goto done;
 
@@ -475,10 +470,7 @@ retry:
 #endif
 	}
 
-	if (!vma || !can_reuse_spf_vma(vma, addr))
-		vma = find_vma(mm, addr);
-
-	fault = __do_page_fault(vma, addr, mm_flags, vm_flags, tsk);
+	fault = __do_page_fault(mm, addr, mm_flags, vm_flags, tsk);
 	major |= fault & VM_FAULT_MAJOR;
 
 	if (fault & VM_FAULT_RETRY) {
@@ -501,13 +493,6 @@ retry:
 		if (mm_flags & FAULT_FLAG_ALLOW_RETRY) {
 			mm_flags &= ~FAULT_FLAG_ALLOW_RETRY;
 			mm_flags |= FAULT_FLAG_TRIED;
-
-			/*
-			 * Do not try to reuse this vma and fetch it
-			 * again since we will release the mmap_sem.
-			 */
-			vma = NULL;
-
 			goto retry;
 		}
 	}
@@ -581,23 +566,6 @@ done:
 
 no_context:
 	__do_kernel_fault(addr, esr, regs);
-	return 0;
-}
-
-static int do_tlb_conf_fault(unsigned long addr,
-				unsigned int esr,
-				struct pt_regs *regs)
-{
-#define SCM_TLB_CONFLICT_CMD	0x1F
-	struct scm_desc desc = {
-		.args[0] = addr,
-		.arginfo = SCM_ARGS(1),
-	};
-
-	if (scm_call2_atomic(SCM_SIP_FNID(SCM_SVC_MP, SCM_TLB_CONFLICT_CMD),
-						&desc))
-		return 1;
-
 	return 0;
 }
 
@@ -685,7 +653,7 @@ static int do_sea(unsigned long addr, unsigned int esr, struct pt_regs *regs)
 	return ret;
 }
 
-static const struct fault_info fault_info[] = {
+static struct fault_info fault_info[] = {
 	{ do_bad,		SIGBUS,  0,		"ttbr address size fault"	},
 	{ do_bad,		SIGBUS,  0,		"level 1 address size fault"	},
 	{ do_bad,		SIGBUS,  0,		"level 2 address size fault"	},
@@ -734,7 +702,7 @@ static const struct fault_info fault_info[] = {
 	{ do_bad,		SIGBUS,  0,		"unknown 45"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 46"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 47"			},
-	{ do_tlb_conf_fault,	SIGBUS,  0,		"TLB conflict abort"		},
+	{ do_bad,		SIGBUS,  0,		"TLB conflict abort"		},
 	{ do_bad,		SIGBUS,  0,		"unknown 49"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 50"			},
 	{ do_bad,		SIGBUS,  0,		"unknown 51"			},
@@ -868,7 +836,7 @@ void __init hook_debug_fault_code(int nr,
 				  int (*fn)(unsigned long, unsigned int, struct pt_regs *),
 				  int sig, int code, const char *name)
 {
-	BUG_ON(nr < 0 || nr >= ARRAY_SIZE(debug_fault_info));
+	WARN_ON(nr < 0 || nr >= ARRAY_SIZE(debug_fault_info));
 
 	debug_fault_info[nr].fn		= fn;
 	debug_fault_info[nr].sig	= sig;
@@ -876,12 +844,25 @@ void __init hook_debug_fault_code(int nr,
 	debug_fault_info[nr].name	= name;
 }
 
-asmlinkage int __exception do_debug_exception(unsigned long addr_if_watchpoint,
+#ifdef CONFIG_MEDIATEK_SOLUTION
+void hook_fault_code(int nr,
+		     int (*fn)(unsigned long, unsigned int, struct pt_regs *),
+		     int sig, int code, const char *name)
+{
+	WARN_ON(nr < 0 || nr >= ARRAY_SIZE(fault_info));
+
+	fault_info[nr].fn   = fn;
+	fault_info[nr].sig  = sig;
+	fault_info[nr].code = code;
+	fault_info[nr].name = name;
+}
+#endif
+
+asmlinkage int __exception do_debug_exception(unsigned long addr,
 					      unsigned int esr,
 					      struct pt_regs *regs)
 {
 	const struct fault_info *inf = debug_fault_info + DBG_ESR_EVT(esr);
-	unsigned long pc = instruction_pointer(regs);
 	struct siginfo info;
 	int rv;
 
@@ -892,19 +873,19 @@ asmlinkage int __exception do_debug_exception(unsigned long addr_if_watchpoint,
 	if (interrupts_enabled(regs))
 		trace_hardirqs_off();
 
-	if (user_mode(regs) && pc > TASK_SIZE)
+	if (user_mode(regs) && instruction_pointer(regs) > TASK_SIZE)
 		arm64_apply_bp_hardening();
 
-	if (!inf->fn(addr_if_watchpoint, esr, regs)) {
+	if (!inf->fn(addr, esr, regs)) {
 		rv = 1;
 	} else {
 		pr_alert("Unhandled debug exception: %s (0x%08x) at 0x%016lx\n",
-			 inf->name, esr, pc);
+			 inf->name, esr, addr);
 
 		info.si_signo = inf->sig;
 		info.si_errno = 0;
 		info.si_code  = inf->code;
-		info.si_addr  = (void __user *)pc;
+		info.si_addr  = (void __user *)addr;
 		arm64_notify_die("", regs, &info, 0);
 		rv = 0;
 	}

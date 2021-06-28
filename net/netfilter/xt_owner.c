@@ -58,7 +58,6 @@ static int owner_check(const struct xt_mtchk_param *par)
 
 	return 0;
 }
-
 static bool
 owner_mt(const struct sk_buff *skb, struct xt_action_param *par)
 {
@@ -66,7 +65,7 @@ owner_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	const struct file *filp;
 	struct sock *sk = skb_to_full_sk(skb);
 	struct net *net = xt_net(par);
-
+ 
 	if (sk == NULL || sk->sk_socket == NULL)
 		return (info->match ^ info->invert) == 0;
 	else if (info->match & info->invert & XT_OWNER_SOCKET)
@@ -109,15 +108,8 @@ static struct xt_match owner_mt_reg __read_mostly = {
 	.checkentry = owner_check,
 	.match      = owner_mt,
 	.matchsize  = sizeof(struct xt_owner_match_info),
-#ifndef VENDOR_EDIT
-//Yuanhua.Du@PSW.NW.DATA.2180713, 2019/07/20, Add NF_INET_LOCAL_IN for iptables owner match rules
 	.hooks      = (1 << NF_INET_LOCAL_OUT) |
 	              (1 << NF_INET_POST_ROUTING),
-#else
-	.hooks      = (1 << NF_INET_LOCAL_OUT) |
-	              (1 << NF_INET_POST_ROUTING) |
-	              (1 << NF_INET_LOCAL_IN),
-#endif
 	.me         = THIS_MODULE,
 };
 

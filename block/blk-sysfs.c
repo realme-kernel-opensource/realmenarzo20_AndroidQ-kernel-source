@@ -439,21 +439,6 @@ static ssize_t queue_poll_delay_store(struct request_queue *q, const char *page,
 	return count;
 }
 
-#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
-// jiheng.xie@PSW.Tech.BSP.Performance, 2019/03/11
-// Add for ioqueue
-static ssize_t queue_show_ohm_inflight(struct request_queue *q, char *page)
-{
-	ssize_t ret;
-
-	ret = sprintf(page, "async:%d\n", q->in_flight[0]);
-	ret += sprintf(page + ret, "sync:%d\n", q->in_flight[1]);
-	ret += sprintf(page + ret, "bg:%d\n", q->in_flight[2]);
-	ret += sprintf(page + ret, "fg:%d\n", q->in_flight[3]);
-	return ret;
-}
-#endif /*VENDOR_EDIT*/
-
 static ssize_t queue_poll_show(struct request_queue *q, char *page)
 {
 	return queue_var_show(test_bit(QUEUE_FLAG_POLL, &q->queue_flags), page);
@@ -561,6 +546,11 @@ static ssize_t queue_wc_store(struct request_queue *q, const char *page,
 static ssize_t queue_dax_show(struct request_queue *q, char *page)
 {
 	return queue_var_show(blk_queue_dax(q), page);
+}
+
+static ssize_t queue_inline_crypt_show(struct request_queue *q, char *page)
+{
+	return queue_var_show(blk_queue_inline_crypt(q), page);
 }
 
 static struct queue_sysfs_entry queue_requests_entry = {
@@ -715,15 +705,6 @@ static struct queue_sysfs_entry queue_iostats_entry = {
 	.store = queue_store_iostats,
 };
 
-#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
-// jiheng.xie@PSW.Tech.BSP.Performance, 2019/03/11
-// Add for ioqueue
-static struct queue_sysfs_entry queue_ohm_inflight_entry = {
-	.attr = {.name = "ohm_inflight", .mode = S_IRUGO },
-	.show = queue_show_ohm_inflight,
-};
-#endif /*VENDOR_EDIT*/
-
 static struct queue_sysfs_entry queue_random_entry = {
 	.attr = {.name = "add_random", .mode = S_IRUGO | S_IWUSR },
 	.show = queue_show_random,
@@ -740,6 +721,11 @@ static struct queue_sysfs_entry queue_poll_delay_entry = {
 	.attr = {.name = "io_poll_delay", .mode = S_IRUGO | S_IWUSR },
 	.show = queue_poll_delay_show,
 	.store = queue_poll_delay_store,
+};
+
+static struct queue_sysfs_entry queue_inline_crypt_entry = {
+	.attr = {.name = "inline_crypt", .mode = S_IRUGO },
+	.show = queue_inline_crypt_show,
 };
 
 static struct queue_sysfs_entry queue_wc_entry = {
@@ -799,17 +785,13 @@ static struct attribute *default_attrs[] = {
 	&queue_nomerges_entry.attr,
 	&queue_rq_affinity_entry.attr,
 	&queue_iostats_entry.attr,
-#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
-// jiheng.xie@PSW.Tech.BSP.Performance, 2019/03/11
-// Add for ioqueue
-	&queue_ohm_inflight_entry.attr,
-#endif /*VENDOR_EDIT*/
 	&queue_random_entry.attr,
 	&queue_poll_entry.attr,
 	&queue_wc_entry.attr,
 	&queue_dax_entry.attr,
 	&queue_wb_lat_entry.attr,
 	&queue_poll_delay_entry.attr,
+	&queue_inline_crypt_entry.attr,
 #ifdef CONFIG_BLK_DEV_THROTTLING_LOW
 	&throtl_sample_time_entry.attr,
 #endif
@@ -891,23 +873,13 @@ static void __blk_release_queue(struct work_struct *work)
 	if (test_bit(QUEUE_FLAG_POLL_STATS, &q->queue_flags))
 		blk_stat_remove_callback(q, q->poll_cb);
 	blk_stat_free_callback(q->poll_cb);
-	
-	
-	if (!blk_queue_dead(q)) {
-		/*
-		 * Last reference was dropped without having called
-		 * blk_cleanup_queue().
-		 */
-		WARN_ONCE(blk_queue_init_done(q),
-			  "request queue %p has been registered but blk_cleanup_queue() has not been called for that queue\n",
-			  q);
-		blk_exit_queue(q);
+	bdi_put(q->backing_dev_info);
+	blkcg_exit_queue(q);
+
+	if (q->elevator) {
+		ioc_clear_queue(q);
+		elevator_exit(q, q->elevator);
 	}
-
-	WARN(q->root_blkg,
-	     "request queue %p is being released but it has not yet been removed from the blkcg controller\n",
-		 q);
-
 
 	blk_free_queue_stats(q->stats);
 

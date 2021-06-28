@@ -28,7 +28,6 @@
  */
 
 #include <linux/export.h>
-#include <linux/kernel.h>
 #include <linux/timex.h>
 #include <linux/capability.h>
 #include <linux/timekeeper_internal.h>
@@ -349,10 +348,9 @@ unsigned int jiffies_to_msecs(const unsigned long j)
 	return (j + (HZ / MSEC_PER_SEC) - 1)/(HZ / MSEC_PER_SEC);
 #else
 # if BITS_PER_LONG == 32
-	return (HZ_TO_MSEC_MUL32 * j + (1ULL << HZ_TO_MSEC_SHR32) - 1) >>
-	       HZ_TO_MSEC_SHR32;
+	return (HZ_TO_MSEC_MUL32 * j) >> HZ_TO_MSEC_SHR32;
 # else
-	return DIV_ROUND_UP(j * HZ_TO_MSEC_NUM, HZ_TO_MSEC_DEN);
+	return (j * HZ_TO_MSEC_NUM) / HZ_TO_MSEC_DEN;
 # endif
 #endif
 }
@@ -871,10 +869,7 @@ struct timespec timespec_add_safe(const struct timespec lhs,
 
 	return res;
 }
-#ifdef VENDOR_EDIT
-/*He.Lu@PSW.MM.AudioDriver.Driver, 2019/12/16, Add for sia*/
-EXPORT_SYMBOL(timespec_add_safe);
-#endif
+
 /*
  * Add two timespec64 values and do a safety check for overflow.
  * It's assumed that both values are valid (>= 0).

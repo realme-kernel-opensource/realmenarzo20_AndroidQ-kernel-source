@@ -14,7 +14,6 @@
  *
  * Author: Mike Chan (mike@android.com)
  */
-
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/cpu.h>
@@ -24,9 +23,9 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/rwsem.h>
+#include <linux/sched.h>
 #include <linux/sched/cpufreq.h>
 #include <linux/sched/rt.h>
-#include <linux/sched/task.h>
 #include <linux/tick.h>
 #include <linux/time.h>
 #include <linux/timer.h>
@@ -156,7 +155,8 @@ static unsigned int default_above_hispeed_delay[] = {
 
 /* Iterate over interactive policies for tunables */
 #define for_each_ipolicy(__ip)	\
-	list_for_each_entry(__ip, &tunables->attr_set.policy_list, tunables_hook)
+	list_for_each_entry(__ip,	\
+	&tunables->attr_set.policy_list, tunables_hook)
 
 static struct interactive_tunables *global_tunables;
 static DEFINE_MUTEX(global_tunables_lock);
@@ -404,7 +404,8 @@ static void eval_target_freq(struct interactive_cpu *icpu)
 
 	if (policy->cur >= tunables->hispeed_freq &&
 	    new_freq > policy->cur &&
-	    now - icpu->pol_hispeed_val_time < freq_to_above_hispeed_delay(tunables, policy->cur)) {
+	    now - icpu->pol_hispeed_val_time <
+	    freq_to_above_hispeed_delay(tunables, policy->cur)) {
 		trace_cpufreq_interactive_notyet(cpu, cpu_load,
 				icpu->target_freq, policy->cur, new_freq);
 		goto exit;
@@ -473,14 +474,14 @@ static void cpufreq_interactive_update(struct interactive_cpu *icpu)
 	slack_timer_resched(icpu, smp_processor_id(), true);
 }
 
+// removed for not support idle notify
+#if 0
 static void cpufreq_interactive_idle_end(void)
 {
 	struct interactive_cpu *icpu = &per_cpu(interactive_cpu,
 						smp_processor_id());
-
 	if (!down_read_trylock(&icpu->enable_sem))
 		return;
-
 	if (icpu->ipolicy) {
 		/*
 		 * We haven't sampled load for more than sampling_rate time, do
@@ -489,9 +490,9 @@ static void cpufreq_interactive_idle_end(void)
 		if (time_after_eq(jiffies, icpu->next_sample_jiffies))
 			cpufreq_interactive_update(icpu);
 	}
-
 	up_read(&icpu->enable_sem);
 }
+#endif
 
 static void cpufreq_interactive_get_policy_info(struct cpufreq_policy *policy,
 						unsigned int *pmax_freq,
@@ -532,7 +533,6 @@ static void cpufreq_interactive_adjust_cpu(unsigned int cpu,
 		icpu = &per_cpu(interactive_cpu, i);
 		icpu->pol_floor_val_time = fvt;
 	}
-
 	if (max_freq != policy->cur) {
 		__cpufreq_driver_target(policy, max_freq, CPUFREQ_RELATION_H);
 		for_each_cpu(i, policy->cpus) {
@@ -540,7 +540,6 @@ static void cpufreq_interactive_adjust_cpu(unsigned int cpu,
 			icpu->pol_hispeed_val_time = hvt;
 		}
 	}
-
 	trace_cpufreq_interactive_setspeed(cpu, max_freq, policy->cur);
 }
 
@@ -618,10 +617,12 @@ static void cpufreq_interactive_boost(struct interactive_tunables *tunables)
 			if (icpu->target_freq < tunables->hispeed_freq) {
 				icpu->target_freq = tunables->hispeed_freq;
 				cpumask_set_cpu(i, &speedchange_cpumask);
-				icpu->pol_hispeed_val_time = ktime_to_us(ktime_get());
+				icpu->pol_hispeed_val_time =
+					ktime_to_us(ktime_get());
 				wakeup = true;
 			}
-			spin_unlock_irqrestore(&icpu->target_freq_lock, flags[1]);
+			spin_unlock_irqrestore(&icpu->target_freq_lock,
+			 flags[1]);
 
 			up_read(&icpu->enable_sem);
 		}
@@ -1013,18 +1014,20 @@ static struct kobj_type interactive_tunables_ktype = {
 	.sysfs_ops = &governor_sysfs_ops,
 };
 
+// removed for not support idle notify
+#if 0
 static int cpufreq_interactive_idle_notifier(struct notifier_block *nb,
 					     unsigned long val, void *data)
 {
 	if (val == IDLE_END)
 		cpufreq_interactive_idle_end();
-
 	return 0;
 }
 
 static struct notifier_block cpufreq_interactive_idle_nb = {
 	.notifier_call = cpufreq_interactive_idle_notifier,
 };
+#endif
 
 /* Interactive Governor callbacks */
 struct interactive_governor {
@@ -1216,7 +1219,8 @@ int cpufreq_interactive_init(struct cpufreq_policy *policy)
 
 	/* One time initialization for governor */
 	if (!interactive_gov.usage_count++) {
-		idle_notifier_register(&cpufreq_interactive_idle_nb);
+		//removed for not support idle notify
+		//idle_notifier_register(&cpufreq_interactive_idle_nb);
 		cpufreq_register_notifier(&cpufreq_notifier_block,
 					  CPUFREQ_TRANSITION_NOTIFIER);
 	}
@@ -1250,7 +1254,8 @@ void cpufreq_interactive_exit(struct cpufreq_policy *policy)
 	if (!--interactive_gov.usage_count) {
 		cpufreq_unregister_notifier(&cpufreq_notifier_block,
 					    CPUFREQ_TRANSITION_NOTIFIER);
-		idle_notifier_unregister(&cpufreq_interactive_idle_nb);
+		//removed for not support idle notify
+		//idle_notifier_unregister(&cpufreq_interactive_idle_nb);
 	}
 
 	count = gov_attr_set_put(&tunables->attr_set, &ipolicy->tunables_hook);
@@ -1334,7 +1339,7 @@ void cpufreq_interactive_limits(struct cpufreq_policy *policy)
 static struct interactive_governor interactive_gov = {
 	.gov = {
 		.name			= "interactive",
-		.max_transition_latency	= TRANSITION_LATENCY_LIMIT,
+		.dynamic_switching = true,
 		.owner			= THIS_MODULE,
 		.init			= cpufreq_interactive_init,
 		.exit			= cpufreq_interactive_exit,

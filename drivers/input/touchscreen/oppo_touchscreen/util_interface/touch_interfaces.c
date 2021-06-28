@@ -669,9 +669,6 @@ int32_t spi_read_write(struct spi_device *client, uint8_t *buf, size_t len, uint
             goto spi_out;
         }
         memset(rx_buf, 0xFF, len + DUMMY_BYTES);
-        t.tx_buf = tx_buf;
-        t.rx_buf = rx_buf;
-        t.len    = (len + DUMMY_BYTES);
         break;
 
     case SPIWRITE:
@@ -681,6 +678,18 @@ int32_t spi_read_write(struct spi_device *client, uint8_t *buf, size_t len, uint
             goto spi_out;
         }
         memcpy(tx_buf, buf, len);
+        break;
+    }
+
+
+    switch (rw) {
+    case SPIREAD:
+        t.tx_buf = tx_buf;
+        t.rx_buf = rx_buf;
+        t.len    = (len + DUMMY_BYTES);
+        break;
+
+    case SPIWRITE:
         t.tx_buf = tx_buf;
         break;
     }

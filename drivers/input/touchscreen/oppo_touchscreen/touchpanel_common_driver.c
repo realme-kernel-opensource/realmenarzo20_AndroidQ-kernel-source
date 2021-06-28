@@ -12,7 +12,6 @@
  * Revision 1.1, 2016-09-09, Tong.han@Bsp.Group.Tp, modify based on gerrit review result(http://gerrit.scm.adc.com:8080/#/c/223721/)
  ****************************************************************/
 #include <asm/uaccess.h>
-#include <linux/module.h>
 #include <linux/irq.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
@@ -405,9 +404,11 @@ static void tp_gesture_handle(struct touchpanel_data *ts)
     } else if (gesture_info_temp.gesture_type == FingerprintDown) {
         ts->fp_info.touch_state = 1;
         opticalfp_irq_handler(&ts->fp_info);
+        notify_display_fpd(true);
     } else if (gesture_info_temp.gesture_type == FingerprintUp) {
         ts->fp_info.touch_state = 0;
         opticalfp_irq_handler(&ts->fp_info);
+        notify_display_fpd(false);
     }
 }
 
@@ -1179,24 +1180,6 @@ static enum hrtimer_restart touchpanel_timer_func(struct hrtimer *timer)
 static irqreturn_t tp_irq_thread_fn(int irq, void *dev_id)
 {
     struct touchpanel_data *ts = (struct touchpanel_data *)dev_id;
-    if (ts->ts_ops->tp_irq_throw_away) {
-        if (ts->ts_ops->tp_irq_throw_away(ts->chip_data)) {
-            return IRQ_HANDLED;
-        }
-    }
-
-    if (ts->i2c_ready == false) {
-        //TPD_INFO("Wait device resume!");
-        wait_event_interruptible_timeout(waiter,
-                                            ts->i2c_ready,
-                                            msecs_to_jiffies(1000));
-        //TPD_INFO("Device maybe resume!");
-    }
-    if (ts->i2c_ready == false) {
-        TPD_INFO("The device not resume 1000ms!");
-        return IRQ_HANDLED;
-    }
-
 
 #ifdef CONFIG_TOUCHIRQ_UPDATE_QOS
     if (pm_qos_state && !ts->is_suspended && !ts->touch_count) {
@@ -1204,7 +1187,6 @@ static irqreturn_t tp_irq_thread_fn(int irq, void *dev_id)
         pm_qos_update_request(&pm_qos_req, pm_qos_value);
     }
 #endif
-
 
     if(ts->sec_long_low_trigger) {
         disable_irq_nosync(ts->irq);
@@ -1412,7 +1394,7 @@ static ssize_t proc_gesture_control_write(struct file *file, const char __user *
     if (ts->gesture_enable != value) {
         ts->gesture_enable = value;
         TPD_INFO("%s: gesture_enable = %d, is_suspended = %d\n", __func__, ts->gesture_enable, ts->is_suspended);
-        if (ts->is_incell_panel && (ts->suspend_state == TP_RESUME_EARLY_EVENT || ts->disable_gesture_ctrl || get_lcd_status() > 0) && (ts->tp_resume_order == LCD_TP_RESUME)) {
+        if (ts->is_incell_panel && (ts->suspend_state == TP_RESUME_EARLY_EVENT || ts->disable_gesture_ctrl) && (ts->tp_resume_order == LCD_TP_RESUME)) {
             TPD_INFO("tp will resume, no need mode_switch in incell panel\n"); /*avoid i2c error or tp rst pulled down in lcd resume*/
         } else if (ts->is_suspended) {
             if (ts->fingerprint_underscreen_support && ts->fp_enable && ts->ts_ops->enable_gesture_mask) {
@@ -1602,7 +1584,7 @@ static ssize_t proc_black_screen_test_read(struct file *file, char __user *user_
 {
     int ret = 0;
     int retry = 20;
-    int msg_size = MESSAGE_SIZE;
+    int msg_size = 256;
     struct touchpanel_data *ts = PDE_DATA(file_inode(file));
 
     TPD_INFO("%s %ld %lld\n", __func__, count, *ppos);
@@ -2476,6 +2458,78 @@ static const struct file_operations proc_incell_panel_fops = {
     .read = proc_incell_panel_info_read,
 };
 
+static ssize_t proc_report_point_first_read(struct file *file, char __user *user_buf, size_t count, loff_t *ppos)
+{
+    int ret = 0;
+    char page[PAGESIZE] = {0};
+    struct touchpanel_data *ts = PDE_DATA(file_inode(file));
+
+    if (!ts)
+        return 0;
+
+    if (!ts->ts_ops)
+        return 0;
+    if (!ts->ts_ops->get_report_point_first) {
+        TPD_INFO("not support ts_ops->get_report_point_first callback\n");
+        return 0;
+    }
+
+    mutex_lock(&ts->mutex);
+    ret =  ts->ts_ops->get_report_point_first(ts->chip_data);
+    mutex_unlock(&ts->mutex);
+    snprintf(page, PAGESIZE-1, "enable is %d, register is : %d\n",
+               ts->report_point_first_enable, ret);
+    ret = simple_read_from_buffer(user_buf, count, ppos, page, strlen(page));
+
+    return ret;
+}
+
+static ssize_t proc_report_point_first_write(struct file *file, const char __user *buffer, size_t count, loff_t *ppos)
+{
+    int value = 0;
+    char buf[4] = {0};
+    struct touchpanel_data *ts = PDE_DATA(file_inode(file));
+
+    if (count > 2)
+        return count;
+
+    if (!ts)
+        return count;
+
+    if (!ts->ts_ops)
+        return count;
+    if (!ts->ts_ops->set_report_point_first) {
+        TPD_INFO("not support ts_ops->set_report_point_first callback\n");
+        return count;
+    }
+
+    if (copy_from_user(buf, buffer, count)) {
+        TPD_INFO("%s: read proc input error.\n", __func__);
+        return count;
+    }
+    sscanf(buf, "%d", &value);
+    if (value > 2)
+        return count;
+
+    if (!ts->is_suspended && (ts->suspend_state == TP_SPEEDUP_RESUME_COMPLETE)) {
+        mutex_lock(&ts->mutex);
+        ts->report_point_first_enable = value;
+        ts->ts_ops->set_report_point_first(ts->chip_data, value);
+        mutex_unlock(&ts->mutex);
+        TPD_INFO("%s: value = %d\n", __func__, value);
+    }
+
+    return count;
+}
+
+static const struct file_operations report_point_first_proc_fops =
+{
+    .read  = proc_report_point_first_read,
+    .write = proc_report_point_first_write,
+    .open  = simple_open,
+    .owner = THIS_MODULE,
+};
+
 #ifdef CONFIG_OPPO_TP_APK
 void log_buf_write(struct touchpanel_data *ts, u8 value)
 {
@@ -2603,23 +2657,6 @@ static char apk_noise_read(struct touchpanel_data *ts)
     return '-';
 }
 
-static char apk_water_read(struct touchpanel_data *ts)
-{
-    if (ts->apk_op->apk_water_get) {
-        if (ts->apk_op->apk_water_get(ts->chip_data) == 1) {
-            return '1';
-        }
-        if (ts->apk_op->apk_water_get(ts->chip_data) == 2) {
-            return '2';
-        }
-        return '0';
-
-    }
-
-    return '-';
-}
-
-
 static char apk_proximity_read(struct touchpanel_data *ts)
 {
 
@@ -2721,10 +2758,6 @@ static ssize_t oppo_apk_read(struct file *file,
         buf[0] = apk_proximity_read(ts);
         len = 1;
         break;
-    case APK_WATER:
-        buf[0] = apk_water_read(ts);
-        len = 1;
-        break;
     case APK_DEBUG_MODE:
         buf[0] = apk_debug_sta(ts);
         len = 1;
@@ -2820,18 +2853,6 @@ static void apk_noise_switch(struct touchpanel_data *ts, char on_off)
     }
 }
 
-static void apk_water_switch(struct touchpanel_data *ts, char on_off)
-{
-    if (ts->apk_op->apk_water_set) {
-        if (on_off == '1') {
-            ts->apk_op->apk_water_set(ts->chip_data, 1);
-        } else if (on_off == '2') {
-            ts->apk_op->apk_water_set(ts->chip_data, 2);
-        } else if (on_off == '0') {
-            ts->apk_op->apk_water_set(ts->chip_data, 0);
-        }
-    }
-}
 
 static void apk_proximity_switch(struct touchpanel_data *ts,
                                  char on_off)
@@ -2958,9 +2979,6 @@ static ssize_t oppo_apk_write(struct file *file,
             break;
         case APK_PROXIMITY:
             apk_proximity_switch(ts, buf[1]);
-            break;
-        case APK_WATER:
-            apk_water_switch(ts, buf[1]);
             break;
         case APK_DEBUG_MODE:
             apk_debug_switch(ts, buf[1]);
@@ -3198,12 +3216,6 @@ static int tp_baseline_debug_read_func(struct seq_file *s, void *v)
         return 0;
     }
 
-    //the diff  is big than one page, so do twice.
-    if (s->size <= (PAGE_SIZE * 2)) {
-        s->count = s->size;
-        return 0;
-    }
-
     if (ts->int_mode == BANNABLE) {
         disable_irq_nosync(ts->irq);
     }
@@ -3220,9 +3232,6 @@ static int tp_baseline_debug_read_func(struct seq_file *s, void *v)
 
     //step6: return to normal mode
     ts->ts_ops->reset(ts->chip_data);
-    if (ts->is_suspended == 0) {
-        tp_touch_btnkey_release();
-    }
     operate_mode_switch(ts);
 
     mutex_unlock(&ts->mutex);
@@ -4431,6 +4440,14 @@ static int init_debug_info_proc(struct touchpanel_data *ts)
         }
     }
 
+    if (ts->report_point_first_support) {
+        prEntry_tmp = proc_create_data("report_point_first", 0666, ts->prEntry_tp, &report_point_first_proc_fops, ts);
+        if (prEntry_tmp == NULL) {
+            ret = -ENOMEM;
+            TPD_INFO("%s: Couldn't create proc entry, %d\n", __func__, __LINE__);
+        }
+    }
+
     return ret;
 }
 
@@ -4604,6 +4621,8 @@ static void init_parse_dts(struct device *dev, struct touchpanel_data *ts)
     ts->irq_trigger_hdl_support = of_property_read_bool(np, "irq_trigger_hdl_support");
     ts->noise_modetest_support = of_property_read_bool(np, "noise_modetest_support");
     ts->fw_update_in_probe_with_headfile = of_property_read_bool(np, "fw_update_in_probe_with_headfile");
+    ts->report_point_first_support = of_property_read_bool(ts->dev->of_node, "report_point_first_support");
+    ts->lcd_wait_tp_resume_finished_support = of_property_read_bool(np, "lcd_wait_tp_resume_finished_support");
     ts->spuri_fp_touch.lcd_resume_ok = true;
 
     rc = of_property_read_u32(np, "vdd_2v8_volt", &ts->hw_res.vdd_volt);
@@ -5077,12 +5096,16 @@ int tp_register_irq_func(struct touchpanel_data *ts)
     int ret = 0;
 #ifdef TPD_USE_EINT
     if (gpio_is_valid(ts->hw_res.irq_gpio)) {
-        TPD_DEBUG("%s, irq_gpio is %d, ts->irq is %d\n", __func__, ts->hw_res.irq_gpio, ts->irq);
+        TPD_INFO("%s, irq_gpio is %d, ts->irq is %d\n", __func__, ts->hw_res.irq_gpio, ts->irq);
 
         if(ts->irq_flags_cover) {
             ts->irq_flags = ts->irq_flags_cover;
             TPD_INFO("%s irq_flags is covered by 0x%x\n", __func__, ts->irq_flags_cover);
         }
+
+	ts->irq = gpio_to_irq(ts->hw_res.irq_gpio);
+	ts->s_client->irq = gpio_to_irq(ts->hw_res.irq_gpio);
+//        TPD_INFO("[infoirq] tp_register_irq_func   ts->s_client->irq = %d \n",ts->s_client->irq);
         ret = request_threaded_irq(ts->irq, NULL,
                                    tp_irq_thread_fn,
                                    ts->irq_flags | IRQF_ONESHOT,
@@ -5458,6 +5481,8 @@ int register_common_touch_device(struct touchpanel_data *pdata)
     ts->skip_reset_in_resume = false;
     ts->irq_slot = 0;
     ts->firmware_update_type = 0;
+    ts->report_point_first_enable = 0;//reporting point first ,when baseline error
+    ts->resume_finished = 1;
     if(ts->is_noflash_ic) {
         ts->irq = ts->s_client->irq;
     } else {
@@ -5591,6 +5616,9 @@ static int tp_suspend(struct device *dev)
         if (ts->game_switch_support)
             ts->ts_ops->mode_switch(ts->chip_data, MODE_GAME, false);
 
+        if (ts->report_point_first_support)
+            ts->ts_ops->set_report_point_first(ts->chip_data, false);
+
         //step5:ear sense support
         if (ts->ear_sense_support) {
             ts->ts_ops->mode_switch(ts->chip_data, MODE_EARSENSE, false);
@@ -5683,6 +5711,9 @@ static void tp_resume(struct device *dev)
         mutex_unlock(&ts->mutex);
     }
 
+    if (ts->lcd_wait_tp_resume_finished_support) {
+        ts->resume_finished = 0;
+    }
     queue_work(ts->speedup_resume_wq, &ts->speed_up_work);
     return;
 
@@ -5741,6 +5772,27 @@ static void lcd_trigger_load_tp_fw(struct work_struct *work)
     }
 }
 
+void lcd_wait_tp_resume_finished(void)
+{
+    int retry_cnt = 0;
+    if (!g_tp)
+        return;
+    if (g_tp->lcd_wait_tp_resume_finished_support) {
+        TPD_INFO("%s\n", __func__);
+
+        do
+        {
+            if(retry_cnt) {
+                msleep(100);
+            }
+            retry_cnt++;
+            TPD_DETAIL("Wait hdl finished retry %d times...  \n", retry_cnt);
+        }
+        while(!g_tp->resume_finished && retry_cnt < 20);
+    }
+}
+EXPORT_SYMBOL(lcd_wait_tp_resume_finished);
+
 /**
  * speedup_resume - speedup resume thread process
  * @work: work struct using for this thread
@@ -5790,6 +5842,9 @@ static void speedup_resume(struct work_struct *work)
                 TPD_INFO("%s: end!\n", __func__);
                 mutex_unlock(&ts->mutex);
                 complete(&ts->pm_complete);
+                if (ts->lcd_wait_tp_resume_finished_support) {
+                    ts->resume_finished = 1;
+                }
                 return;
             }
         }
@@ -5819,6 +5874,9 @@ static void speedup_resume(struct work_struct *work)
 
     ts->suspend_state = TP_SPEEDUP_RESUME_COMPLETE;
 
+    if (ts->lcd_wait_tp_resume_finished_support) {
+        ts->resume_finished = 1;
+    }
     //step7:Unlock  && exit
     TPD_INFO("%s: end!\n", __func__);
     mutex_unlock(&ts->mutex);
@@ -5948,8 +6006,7 @@ void tp_i2c_resume(struct touchpanel_data *ts)
 
 OUT:
     ts->i2c_ready = true;
-    if ((ts->black_gesture_support && ts->gesture_enable == 1)||
-        (ts->spurious_fp_support && ts->spuri_fp_touch.fp_trigger)) {
+    if (ts->spurious_fp_support && ts->spuri_fp_touch.fp_trigger) {
         wake_up_interruptible(&waiter);
     }
 }
@@ -6061,156 +6118,3 @@ int __init get_oem_verified_boot_state(void)
     }
     return 0;
 }
-
-static int oppo_tp_spi_suspend(struct device *dev)
-{
-    struct touchpanel_data *ts = dev_get_drvdata(dev);
-
-    TPD_INFO("%s: is called\n", __func__);
-    if ((ts->boot_mode == MSM_BOOT_MODE__FACTORY
-         || ts->boot_mode == MSM_BOOT_MODE__RF
-         || ts->boot_mode == MSM_BOOT_MODE__WLAN)) {
-
-        TPD_INFO("spi_resume do nothing in ftm\n");
-        return 0;
-    }
-    tp_i2c_suspend(ts);
-
-    return 0;
-}
-
-static int oppo_tp_spi_resume(struct device *dev)
-{
-    struct touchpanel_data *ts = dev_get_drvdata(dev);
-
-    TPD_INFO("%s is called\n", __func__);
-    if ((ts->boot_mode == MSM_BOOT_MODE__FACTORY
-         || ts->boot_mode == MSM_BOOT_MODE__RF
-         || ts->boot_mode == MSM_BOOT_MODE__WLAN)) {
-
-        TPD_INFO("spi_resume do nothing in ftm\n");
-        return 0;
-    }
-    tp_i2c_resume(ts);
-
-    return 0;
-}
-
-static const struct dev_pm_ops tp_pm_ops = {
-#ifdef CONFIG_FB
-    .suspend = oppo_tp_spi_suspend,
-    .resume = oppo_tp_spi_resume,
-#endif
-};
-
-
-#define TP_DRIVER_NAME          "oppo_tp_driver"
-#define MATCH_ILI_9881H         "tchip,ilitek"
-#define MATCH_HIMAX_83112A      "himax,hx83112a_nf"
-#define MATCH_NOVA_36525B       "novatek,nf_nt36525b"
-
-static struct of_device_id tp_match_table_all[] = {
-    { .compatible = "oppo,tp_noflash",},
-    { },
-};
-
-#ifdef CONFIG_TOUCHPANEL_ILITEK_ILITEK9881H_V3
-static struct of_device_id tp_match_table_ili[] = {
-    { .compatible = MATCH_ILI_9881H,},
-    { },
-};
-#endif
-
-
-#ifdef CONFIG_TOUCHPANEL_HIMAX_HX83112A_NOFLASH
-static struct of_device_id tp_match_table_himax[] = {
-    { .compatible = MATCH_HIMAX_83112A,},
-    { },
-};
-#endif
-
-#ifdef CONFIG_TOUCHPANEL_NOVA_NT36525B_NOFLASH
-static struct of_device_id tp_match_table_nova[] = {
-    { .compatible = MATCH_NOVA_36525B,},
-    { },
-};
-#endif
-
-
-static struct spi_driver tp_spi_driver = {
-    .driver = {
-        .name   = TP_DRIVER_NAME,
-        .owner  = THIS_MODULE,
-        .of_match_table = tp_match_table_all,
-        .pm = &tp_pm_ops,
-    },
-};
-
-#ifdef CONFIG_TOUCHPANEL_HIMAX_HX83112A_NOFLASH
-extern int __maybe_unused hx83112b_tp_probe(struct spi_device *spi);
-extern int __maybe_unused hx83112b_tp_remove(struct spi_device *spi);
-#endif
-
-#ifdef CONFIG_TOUCHPANEL_ILITEK_ILITEK9881H_V3
-extern int __maybe_unused ilitek_platform_probe(struct spi_device *spi);
-extern int __maybe_unused ilitek_platform_remove(struct spi_device *spi);
-#endif
-
-#ifdef CONFIG_TOUCHPANEL_NOVA_NT36525B_NOFLASH
-extern int __maybe_unused nvt_tp_probe(struct spi_device *client);
-extern int __maybe_unused nvt_tp_remove(struct spi_device *client);
-#endif
-
-static int32_t __init oppo_tp_driver_init(void)
-{
-    TPD_INFO("%s is called\n", __func__);
-    switch (tp_judge_ic_match()) {
-    case UNKNOWN_IC:
-        return -1;
-#ifdef CONFIG_TOUCHPANEL_HIMAX_HX83112A_NOFLASH
-    case HIMAX83112A:
-        tp_spi_driver.driver.of_match_table = tp_match_table_himax;
-        tp_spi_driver.probe = hx83112b_tp_probe;
-        tp_spi_driver.remove = hx83112b_tp_remove;
-        break;
-#endif
-
-#ifdef CONFIG_TOUCHPANEL_ILITEK_ILITEK9881H_V3
-    case ILI9881H:
-        tp_spi_driver.driver.of_match_table = tp_match_table_ili;
-        tp_spi_driver.probe = ilitek_platform_probe;
-        tp_spi_driver.remove = ilitek_platform_remove;
-        break;
-#endif
-
-#ifdef CONFIG_TOUCHPANEL_NOVA_NT36525B_NOFLASH
-    case NT36525B:
-        tp_spi_driver.driver.of_match_table = tp_match_table_nova;
-        tp_spi_driver.probe = nvt_tp_probe;
-        tp_spi_driver.remove = nvt_tp_remove;
-        break;
-#endif
-    default:
-        return -1;
-        break;
-    }
-    get_oem_verified_boot_state();
-
-    if (spi_register_driver(&tp_spi_driver) != 0) {
-        TPD_INFO("unable to add spi driver.\n");
-        return -1;
-    }
-    return 0;
-}
-
-static void __exit oppo_tp_driver_exit(void)
-{
-    spi_unregister_driver(&tp_spi_driver);
-}
-
-module_init(oppo_tp_driver_init);
-module_exit(oppo_tp_driver_exit);
-
-MODULE_DESCRIPTION("OPPO Touchscreen Driver");
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Ping.Zhang<zhangping.a@oppo.com>");

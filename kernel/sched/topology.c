@@ -6,9 +6,9 @@
 #include <linux/mutex.h>
 
 #include "sched.h"
+#include "../../drivers/misc/mediatek/base/power/include/mtk_upower.h"
 
 DEFINE_MUTEX(sched_domains_mutex);
-
 /* Protected by sched_domains_mutex: */
 cpumask_var_t sched_domains_tmpmask;
 cpumask_var_t sched_domains_tmpmask2;
@@ -303,7 +303,6 @@ static int init_rootdomain(struct root_domain *rd)
 		goto free_cpudl;
 
 	rd->max_cap_orig_cpu = rd->min_cap_orig_cpu = -1;
-	rd->mid_cap_orig_cpu = -1;
 
 	init_max_cpu_capacity(&rd->max_cpu_capacity);
 
@@ -979,12 +978,10 @@ void init_sched_groups_capacity(int cpu, struct sched_domain *sd)
 {
 	struct sched_group *sg = sd->groups;
 	cpumask_t avail_mask;
-
 	WARN_ON(!sg);
 
 	do {
 		int cpu, max_cpu = -1;
-
 		cpumask_andnot(&avail_mask, sched_group_span(sg),
 							cpu_isolated_mask);
 		sg->group_weight = cpumask_weight(&avail_mask);
@@ -1010,7 +1007,12 @@ next:
 	update_group_capacity(sd, cpu);
 }
 
+#ifndef CONFIG_MTK_UNIFY_POWER
 #define cap_state_power(s,i) (s->cap_states[i].power)
+#else
+#define cap_state_power(s, i) \
+	(s->cap_states[i].dyn_pwr + s->cap_states[i].lkg_pwr[0])
+#endif
 #define cap_state_cap(s,i) (s->cap_states[i].cap)
 #define idle_state_power(s,i) (s->idle_states[i].power)
 
@@ -1045,8 +1047,16 @@ static inline int sched_group_energy_equal(const struct sched_group_energy *a,
 	return true;
 }
 
+#ifndef CONFIG_MTK_UNIFY_POWER
 #define energy_eff(e, n) \
-    ((e->cap_states[n].cap << SCHED_CAPACITY_SHIFT)/e->cap_states[n].power)
+	((e->cap_states[n].cap << SCHED_CAPACITY_SHIFT)/cap_state_power(e, n))
+#else
+	/* to enlarge the difference of energy_eff */
+#define CPU_CAP_HIGH_RES 6
+#define energy_eff(e, n) \
+	((e->cap_states[n].cap << (SCHED_CAPACITY_SHIFT + CPU_CAP_HIGH_RES)) \
+		/cap_state_power(e, n))
+#endif
 
 static void init_sched_groups_energy(int cpu, struct sched_domain *sd,
 				     sched_domain_energy_f fn)
@@ -1097,14 +1107,18 @@ static void init_sched_groups_energy(int cpu, struct sched_domain *sd,
 	 * decreasing in the capacity state vector with higher indexes
 	 */
 	for (i = 0; i < (sge->nr_cap_states - 1); i++) {
+#ifdef CONFIG_MTK_UNIFY_POWER
+		if (cap_state_power(sge, i) == 0)
+			continue;
+#endif
 		if (energy_eff(sge, i) > energy_eff(sge, i+1))
 			continue;
 #ifdef CONFIG_SCHED_DEBUG
-		pr_debug("WARN: cpu=%d, domain=%s: incr. energy eff %lu[%d]->%lu[%d]\n",
+		pr_warn("WARN: cpu=%d, domain=%s: incr. energy eff %lu[%d]->%lu[%d]\n",
 			cpu, sd->name, energy_eff(sge, i), i,
 			energy_eff(sge, i+1), i+1);
 #else
-		pr_debug("WARN: cpu=%d: incr. energy eff %lu[%d]->%lu[%d]\n",
+		pr_warn("WARN: cpu=%d: incr. energy eff %lu[%d]->%lu[%d]\n",
 			cpu, energy_eff(sge, i), i, energy_eff(sge, i+1), i+1);
 #endif
 	}
@@ -1880,42 +1894,16 @@ build_sched_domains(const struct cpumask *cpu_map, struct sched_domain_attr *att
 
 		sd = *per_cpu_ptr(d.sd, i);
 
-		if ((max_cpu < 0) || (arch_scale_cpu_capacity(NULL, i) >
-				arch_scale_cpu_capacity(NULL, max_cpu)))
+		if ((max_cpu < 0) || (cpu_rq(i)->cpu_capacity_orig >
+		    cpu_rq(max_cpu)->cpu_capacity_orig))
 			WRITE_ONCE(d.rd->max_cap_orig_cpu, i);
 
-		if ((min_cpu < 0) || (arch_scale_cpu_capacity(NULL, i) <
-				arch_scale_cpu_capacity(NULL, min_cpu)))
+		if ((min_cpu < 0) || (cpu_rq(i)->cpu_capacity_orig <
+		    cpu_rq(min_cpu)->cpu_capacity_orig))
 			WRITE_ONCE(d.rd->min_cap_orig_cpu, i);
 
 		cpu_attach_domain(sd, d.rd, i);
 	}
-
-	/* set the mid capacity cpu (assumes only 3 capacities) */
-	for_each_cpu(i, cpu_map) {
-		int max_cpu = READ_ONCE(d.rd->max_cap_orig_cpu);
-		int min_cpu = READ_ONCE(d.rd->min_cap_orig_cpu);
-
-		if ((arch_scale_cpu_capacity(NULL, i)
-				!=  arch_scale_cpu_capacity(NULL, min_cpu)) &&
-				(arch_scale_cpu_capacity(NULL, i)
-				!=  arch_scale_cpu_capacity(NULL, max_cpu))) {
-			WRITE_ONCE(d.rd->mid_cap_orig_cpu, i);
-			break;
-		}
-	}
-
-	/*
-	 * The max_cpu_capacity reflect the original capacity which does not
-	 * change dynamically. So update the max cap CPU and its capacity
-	 * here.
-	 */
-	if (d.rd->max_cap_orig_cpu != -1) {
-		d.rd->max_cpu_capacity.cpu = d.rd->max_cap_orig_cpu;
-		d.rd->max_cpu_capacity.val = arch_scale_cpu_capacity(NULL,
-						d.rd->max_cap_orig_cpu);
-	}
-
 	rcu_read_unlock();
 
 	if (!cpumask_empty(cpu_map))

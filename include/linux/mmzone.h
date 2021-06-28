@@ -36,12 +36,12 @@
  */
 #define PAGE_ALLOC_COSTLY_ORDER 3
 
-#define MAX_KSWAPD_THREADS 16
-
 enum migratetype {
 	MIGRATE_UNMOVABLE,
 	MIGRATE_MOVABLE,
 	MIGRATE_RECLAIMABLE,
+	MIGRATE_PCPTYPES,	/* the number of types on the pcp lists */
+	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
 #ifdef CONFIG_CMA
 	/*
 	 * MIGRATE_CMA migration type is designed to mimic the way
@@ -58,8 +58,12 @@ enum migratetype {
 	 */
 	MIGRATE_CMA,
 #endif
-	MIGRATE_PCPTYPES, /* the number of types on the pcp lists */
-	MIGRATE_HIGHATOMIC = MIGRATE_PCPTYPES,
+#ifdef VENDOR_EDIT
+/* Hucai.Zhou@PSW.BSP.Kernel.MM, 2018-3-15
+ * Add a migrate type to manage special page alloc/free
+ */
+        MIGRATE_OPPO2,
+#endif /* VENDOR_EDIT */
 #ifdef CONFIG_MEMORY_ISOLATION
 	MIGRATE_ISOLATE,	/* can't allocate from here */
 #endif
@@ -72,11 +76,9 @@ extern char * const migratetype_names[MIGRATE_TYPES];
 #ifdef CONFIG_CMA
 #  define is_migrate_cma(migratetype) unlikely((migratetype) == MIGRATE_CMA)
 #  define is_migrate_cma_page(_page) (get_pageblock_migratetype(_page) == MIGRATE_CMA)
-#  define get_cma_migrate_type() MIGRATE_CMA
 #else
 #  define is_migrate_cma(migratetype) false
 #  define is_migrate_cma_page(_page) false
-#  define get_cma_migrate_type() MIGRATE_MOVABLE
 #endif
 
 static inline bool is_migrate_movable(int mt)
@@ -155,6 +157,7 @@ enum zone_stat_item {
 #ifdef VENDOR_EDIT
  /*Huacai.Zhou@PSW.BSP.Kernel.MM, 2018-09-25, add ion cached account*/
         NR_IONCACHE_PAGES,
+	NR_FREE_OPPO2_PAGES,
 #endif /* VENDOR_EDIT */
 	NR_VM_ZONE_STAT_ITEMS };
 
@@ -190,7 +193,6 @@ enum node_stat_item {
 	NR_DIRTIED,		/* page dirtyings since bootup */
 	NR_WRITTEN,		/* page writings since bootup */
 	NR_INDIRECTLY_RECLAIMABLE_BYTES, /* measured in bytes */
-	NR_UNRECLAIMABLE_PAGES,
 	NR_VM_NODE_STAT_ITEMS
 };
 
@@ -374,6 +376,13 @@ struct zone {
 
 	unsigned long nr_reserved_highatomic;
 
+#ifdef VENDOR_EDIT
+/* Hucai.Zhou@PSW.BSP.Kernel.MM, 2018-3-15
+ * Number of MIGRATE_OPPO page block.
+ */
+	unsigned long nr_migrate_oppo2_block;
+#endif /* VENDOR_EDIT */
+
 	/*
 	 * We don't know if the memory that we're going to allocate will be
 	 * freeable or/and it will be released eventually, so to avoid totally
@@ -390,10 +399,6 @@ struct zone {
 #endif
 	struct pglist_data	*zone_pgdat;
 	struct per_cpu_pageset __percpu *pageset;
-
-#ifdef CONFIG_CMA
-	bool			cma_alloc;
-#endif
 
 #ifndef CONFIG_SPARSEMEM
 	/*
@@ -668,12 +673,9 @@ typedef struct pglist_data {
 	int node_id;
 	wait_queue_head_t kswapd_wait;
 	wait_queue_head_t pfmemalloc_wait;
-	
-	/*
-	 * Protected by mem_hotplug_begin/end()
-	 */
-	struct task_struct *kswapd[MAX_KSWAPD_THREADS];
-    int kswapd_order;
+	struct task_struct *kswapd;	/* Protected by
+					   mem_hotplug_begin/end() */
+	int kswapd_order;
 	enum zone_type kswapd_classzone_idx;
 
 	int kswapd_failures;		/* Number of 'reclaimed == 0' runs */
@@ -906,8 +908,6 @@ static inline int is_highmem(struct zone *zone)
 
 /* These two functions are used to setup the per zone pages min values */
 struct ctl_table;
-int kswapd_threads_sysctl_handler(struct ctl_table *, int,
-					void __user *, size_t *, loff_t *);
 int min_free_kbytes_sysctl_handler(struct ctl_table *, int,
 					void __user *, size_t *, loff_t *);
 int watermark_scale_factor_sysctl_handler(struct ctl_table *, int,

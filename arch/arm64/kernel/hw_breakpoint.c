@@ -548,12 +548,13 @@ int arch_validate_hwbkpt_settings(struct perf_event *bp)
 			/* Aligned */
 			break;
 		case 1:
-			/* Allow single byte watchpoint. */
-			if (info->ctrl.len == ARM_BREAKPOINT_LEN_1)
-				break;
 		case 2:
 			/* Allow halfword watchpoints and breakpoints. */
 			if (info->ctrl.len == ARM_BREAKPOINT_LEN_2)
+				break;
+		case 3:
+			/* Allow single byte watchpoint. */
+			if (info->ctrl.len == ARM_BREAKPOINT_LEN_1)
 				break;
 		default:
 			return -EINVAL;
@@ -935,31 +936,12 @@ void hw_breakpoint_thread_switch(struct task_struct *next)
 }
 
 /*
- * Check if halted debug mode is enabled.
- */
-static u32 hde_enabled(void)
-{
-	u32 mdscr;
-
-	asm volatile("mrs %0, mdscr_el1" : "=r" (mdscr));
-	return (mdscr & DBG_MDSCR_HDE);
-}
-
-/*
  * CPU initialisation.
  */
 static int hw_breakpoint_reset(unsigned int cpu)
 {
 	int i;
 	struct perf_event **slots;
-
-	/*
-	 * When halting debug mode is enabled, break point could be already
-	 * set be external debugger. Don't reset debug registers here to
-	 * reserve break point from external debugger.
-	 */
-	if (hde_enabled())
-		return 0;
 	/*
 	 * When a CPU goes through cold-boot, it does not have any installed
 	 * slot, so it is safe to share the same function for restoring and

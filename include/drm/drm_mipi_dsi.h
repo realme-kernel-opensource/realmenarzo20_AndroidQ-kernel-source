@@ -21,18 +21,12 @@ struct mipi_dsi_device;
 #define MIPI_DSI_MSG_REQ_ACK	BIT(0)
 /* use Low Power Mode to transmit message */
 #define MIPI_DSI_MSG_USE_LPM	BIT(1)
-/* read mipi_dsi_msg.ctrl and unicast to only that ctrls */
-#define MIPI_DSI_MSG_UNICAST	BIT(2)
-/* Stack all commands until lastcommand bit and trigger all in one go */
-#define MIPI_DSI_MSG_LASTCOMMAND BIT(3)
 
 /**
  * struct mipi_dsi_msg - read/write DSI buffer
  * @channel: virtual channel id
  * @type: payload data type
  * @flags: flags controlling this message transmission
- * @ctrl: ctrl index to transmit on
- * @wait_ms: duration in ms to wait after message transmission
  * @tx_len: length of @tx_buf
  * @tx_buf: data to be written
  * @rx_len: length of @rx_buf
@@ -42,8 +36,6 @@ struct mipi_dsi_msg {
 	u8 channel;
 	u8 type;
 	u16 flags;
-	u32 ctrl;
-	u32 wait_ms;
 
 	size_t tx_len;
 	const void *tx_buf;
@@ -142,10 +134,6 @@ struct mipi_dsi_host *of_find_mipi_dsi_host_by_node(struct device_node *node);
 #define MIPI_DSI_CLOCK_NON_CONTINUOUS	BIT(10)
 /* transmit data in low power */
 #define MIPI_DSI_MODE_LPM		BIT(11)
-/* disable BLLP area */
-#define MIPI_DSI_MODE_VIDEO_BLLP	BIT(12)
-/* disable EOF BLLP area */
-#define MIPI_DSI_MODE_VIDEO_EOF_BLLP	BIT(13)
 
 enum mipi_dsi_pixel_format {
 	MIPI_DSI_FMT_RGB888,
@@ -284,21 +272,8 @@ int mipi_dsi_dcs_set_pixel_format(struct mipi_dsi_device *dsi, u8 format);
 int mipi_dsi_dcs_set_tear_scanline(struct mipi_dsi_device *dsi, u16 scanline);
 int mipi_dsi_dcs_set_display_brightness(struct mipi_dsi_device *dsi,
 					u16 brightness);
-#ifdef VENDOR_EDIT
-//liwei.a@PSW.MM.Display.LCD.Machine, 2019/05/12, add for setting backlight by dcs
-int oppo_mipi_dsi_dcs_set_display_brightness(struct mipi_dsi_device *dsi,
-					u16 brightness, int is_ili);
-#endif
-int mipi_dsi_dcs_set_display_brightness_himax(struct mipi_dsi_device *dsi,
-					u16 brightness);
 int mipi_dsi_dcs_get_display_brightness(struct mipi_dsi_device *dsi,
 					u16 *brightness);
-
-//#ifdef ODM_WT_EDIT
-//Hongzhu.Su@ODM_WT.MM.Display.Lcd.1941873, Start 2019/04/17, add CABC cmd used for power saving
-int mipi_dsi_dcs_set_display_cabc(struct mipi_dsi_device *dsi, u32 cabc_mode);
-//Hongzhu.Su@ODM_WT.MM.Display.Lcd.1941873, End 2019/04/17, add CABC cmd used for power saving
-//#endif /* ODM_WT_EDIT */
 
 /**
  * struct mipi_dsi_driver - DSI driver

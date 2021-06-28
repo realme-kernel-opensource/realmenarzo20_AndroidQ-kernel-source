@@ -216,7 +216,6 @@ struct cpu_load_stat {
         u64 t_softirq;
 };
 
-#define OPPO_CPUTIME
 int ohm_get_cur_cpuload(bool ctrl)
 {
 	int i;

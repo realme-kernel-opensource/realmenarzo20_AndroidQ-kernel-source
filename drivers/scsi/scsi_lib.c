@@ -71,11 +71,11 @@ int scsi_init_sense_cache(struct Scsi_Host *shost)
 	struct kmem_cache *cache;
 	int ret = 0;
 
+	mutex_lock(&scsi_sense_cache_mutex);
 	cache = scsi_select_sense_cache(shost->unchecked_isa_dma);
 	if (cache)
-		return 0;
+		goto exit;
 
-	mutex_lock(&scsi_sense_cache_mutex);
 	if (shost->unchecked_isa_dma) {
 		scsi_sense_isadma_cache =
 			kmem_cache_create("scsi_sense_cache(DMA)",
@@ -90,7 +90,7 @@ int scsi_init_sense_cache(struct Scsi_Host *shost)
 		if (!scsi_sense_cache)
 			ret = -ENOMEM;
 	}
-
+ exit:
 	mutex_unlock(&scsi_sense_cache_mutex);
 	return ret;
 }
@@ -266,11 +266,7 @@ int scsi_execute(struct scsi_device *sdev, const unsigned char *cmd,
 	rq->cmd_len = COMMAND_SIZE(cmd[0]);
 	memcpy(rq->cmd, cmd, rq->cmd_len);
 	rq->retries = retries;
-	if (likely(!sdev->timeout_override))
-		req->timeout = timeout;
-	else
-		req->timeout = sdev->timeout_override;
-
+	req->timeout = timeout;
 	req->cmd_flags |= flags;
 	req->rq_flags |= rq_flags | RQF_QUIET | RQF_PREEMPT;
 
@@ -2172,8 +2168,9 @@ void __scsi_init_queue(struct Scsi_Host *shost, struct request_queue *q)
 	if (!shost->use_clustering)
 		q->limits.cluster = 0;
 
-	if (shost->inlinecrypt_support)
+	if (shost->use_inline_crypt)
 		queue_flag_set_unlocked(QUEUE_FLAG_INLINECRYPT, q);
+
 	/*
 	 * Set a reasonable default alignment:  The larger of 32-byte (dword),
 	 * which is a common minimum for HBAs, and the minimum DMA alignment,
@@ -2378,33 +2375,6 @@ void scsi_unblock_requests(struct Scsi_Host *shost)
 	scsi_run_host_queues(shost);
 }
 EXPORT_SYMBOL(scsi_unblock_requests);
-
-/*
- * Function:    scsi_set_cmd_timeout_override()
- *
- * Purpose:     Utility function used by low-level drivers to override
-		timeout for the scsi commands.
- *
- * Arguments:   sdev       - scsi device in question
- *		timeout	   - timeout in jiffies
- *
- * Returns:     Nothing
- *
- * Lock status: No locks are assumed held.
- *
- * Notes:	Some platforms might be very slow and command completion may
- *		take much longer than default scsi command timeouts.
- *		SCSI Read/Write command timeout can be changed by
- *		blk_queue_rq_timeout() but there is no option to override
- *		timeout for rest of the scsi commands. This function would
- *		would allow this.
- */
-void scsi_set_cmd_timeout_override(struct scsi_device *sdev,
-				   unsigned int timeout)
-{
-	sdev->timeout_override = timeout;
-}
-EXPORT_SYMBOL(scsi_set_cmd_timeout_override);
 
 int __init scsi_init_queue(void)
 {

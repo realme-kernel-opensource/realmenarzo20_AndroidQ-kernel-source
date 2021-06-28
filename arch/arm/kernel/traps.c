@@ -31,7 +31,6 @@
 #include <linux/irq.h>
 
 #include <linux/atomic.h>
-#include <asm/arch_timer.h>
 #include <asm/cacheflush.h>
 #include <asm/exception.h>
 #include <asm/unistd.h>
@@ -41,6 +40,7 @@
 #include <asm/tls.h>
 #include <asm/system_misc.h>
 #include <asm/opcodes.h>
+#include <mt-plat/aee.h>
 
 
 static const char *handler[]= {
@@ -438,9 +438,20 @@ int call_undef_hook(struct pt_regs *regs, unsigned int instr)
 
 asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 {
+	struct thread_info *thread = current_thread_info();
 	unsigned int instr;
 	siginfo_t info;
 	void __user *pc;
+
+	if (!user_mode(regs)) {
+		thread->cpu_excp++;
+		if (thread->cpu_excp == 1) {
+			thread->regs_on_excp = (void *)regs;
+			aee_excp_regs = (void *)regs;
+		}
+		if (thread->cpu_excp >= 2)
+			aee_stop_nested_panic(regs);
+	}
 
 	pc = (void __user *)instruction_pointer(regs);
 
@@ -473,8 +484,11 @@ asmlinkage void __exception do_undefinstr(struct pt_regs *regs)
 		instr = __mem_to_opcode_arm(instr);
 	}
 
-	if (call_undef_hook(regs, instr) == 0)
+	if (call_undef_hook(regs, instr) == 0) {
+		if (!user_mode(regs))
+			thread->cpu_excp--;
 		return;
+	}
 
 die_sig:
 #ifdef CONFIG_DEBUG_USER
@@ -730,42 +744,6 @@ static int __init arm_mrc_hook_init(void)
 late_initcall(arm_mrc_hook_init);
 
 #endif
-
-static int get_pct_trap(struct pt_regs *regs, unsigned int instr)
-{
-	u64 cntpct;
-	unsigned int res;
-	int rd = (instr >> 12) & 0xF;
-	int rn =  (instr >> 16) & 0xF;
-
-	res = arm_check_condition(instr, regs->ARM_cpsr);
-	if (res == ARM_OPCODE_CONDTEST_FAIL) {
-		regs->ARM_pc += 4;
-		return 0;
-	}
-
-	if (rd == 15 || rn == 15)
-		return 1;
-	cntpct = arch_counter_get_cntpct();
-	regs->uregs[rd] = cntpct;
-	regs->uregs[rn] = cntpct >> 32;
-	regs->ARM_pc += 4;
-	return 0;
-}
-
-static struct undef_hook get_pct_hook = {
-	.instr_mask	= 0x0ff00fff,
-	.instr_val	= 0x0c500f0e,
-	.cpsr_mask	= MODE_MASK,
-	.cpsr_val	= USR_MODE,
-	.fn		= get_pct_trap,
-};
-
-void get_pct_hook_init(void)
-{
-	register_undef_hook(&get_pct_hook);
-}
-EXPORT_SYMBOL(get_pct_hook_init);
 
 /*
  * A data abort trap was taken, but we did not handle the instruction.

@@ -140,11 +140,9 @@ static int __nf_queue(struct sk_buff *skb, const struct nf_hook_state *state,
 
 #else /* VENDOR_EDIT */
 static int __nf_queue(struct sk_buff *skb, const struct nf_hook_state *state,
-                      const struct nf_hook_entries *entries,
-                      unsigned int index, unsigned int queuenum)
-
+		      const struct nf_hook_entries *entries,
+		      unsigned int index, unsigned int queuenum)
 #endif /* VENDOR_EDIT */
-
 {
 	int status = -ENOENT;
 	struct nf_queue_entry *entry = NULL;
@@ -188,6 +186,11 @@ static int __nf_queue(struct sk_buff *skb, const struct nf_hook_state *state,
 		goto err;
 	}
 
+	if (!skb_dst_force(skb) && state->hook != NF_INET_PRE_ROUTING) {
+		status = -ENETDOWN;
+		goto err;
+	}
+
 	*entry = (struct nf_queue_entry) {
 		.skb	= skb,
 		.state	= *state,
@@ -196,7 +199,6 @@ static int __nf_queue(struct sk_buff *skb, const struct nf_hook_state *state,
 	};
 
 	nf_queue_entry_get_refs(entry);
-	skb_dst_force(skb);
 	afinfo->saveroute(skb, entry);
 	status = qh->outfn(entry, queuenum);
 
@@ -260,6 +262,7 @@ static unsigned int nf_iterate(struct sk_buff *skb,
 repeat:
 		verdict = nf_hook_entry_hookfn(hook, skb, state);
 		if (verdict != NF_ACCEPT) {
+			*index = i;
 			if (verdict != NF_REPEAT)
 				return verdict;
 			goto repeat;

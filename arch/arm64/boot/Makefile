@@ -26,31 +26,15 @@ DTB_LIST := $(addsuffix .dtb,$(DTB_NAMES))
 else
 DTB_LIST := $(dtb-y)
 endif
-DTB_OBJS := $(shell find $(obj)/dts/ -name \*.dtb)
+DTB_OBJS := $(addprefix $(obj)/dts/,$(DTB_LIST))
 
-# Add RTIC DTB to the DTB list if RTIC MPGen is enabled
-# Note, we keep this for compatibility with
-# BUILD_ARM64_APPENDED_DTB_IMAGE targets.
-# The rtic_mp.dts would be generated with the vmlinux if
-# MPGen enabled (RTIC_MPGEN defined).
-ifdef RTIC_MPGEN
-DTB_OBJS += rtic_mp.dtb
-endif
-
-rtic_mp.dtb: vmlinux FORCE
-	$(DTC) -O dtb -o rtic_mp.dtb -b 0 $(DTC_FLAGS) rtic_mp.dts
-
-$(obj)/Image: vmlinux FORCE
+$(obj)/Image: vmlinux $(obj)/mtk.dtb FORCE
 	$(call if_changed,objcopy)
 
 $(obj)/Image.bz2: $(obj)/Image FORCE
 	$(call if_changed,bzip2)
 
-$(obj)/Image-dtb-hdr: $(obj)/Image FORCE
-	echo -n 'UNCOMPRESSED_IMG' > $@ && \
-	$(call size_append, $(filter-out FORCE,$^)) >> $@
-
-$(obj)/Image-dtb: $(obj)/Image-dtb-hdr $(obj)/Image $(DTB_OBJS) FORCE
+$(obj)/Image-dtb: $(obj)/Image $(DTB_OBJS) FORCE
 	$(call if_changed,cat)
 
 $(obj)/Image.gz: $(obj)/Image FORCE
@@ -66,6 +50,9 @@ $(obj)/Image.lzo: $(obj)/Image FORCE
 	$(call if_changed,lzo)
 
 $(obj)/Image.gz-dtb: $(obj)/Image.gz $(DTB_OBJS) FORCE
+	$(call if_changed,cat)
+
+$(obj)/mtk.dtb: $(DTB_OBJS) FORCE
 	$(call if_changed,cat)
 
 install:

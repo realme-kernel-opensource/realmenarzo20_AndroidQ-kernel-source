@@ -212,8 +212,8 @@ config GENEVE
 
 config GTP
 	tristate "GPRS Tunneling Protocol datapath (GTP-U)"
-	depends on INET && NET_UDP_TUNNEL
-	select NET_IP_TUNNEL
+	depends on INET
+	select NET_UDP_TUNNEL
 	---help---
 	  This allows one to create gtp virtual interfaces that provide
 	  the GPRS Tunneling Protocol datapath (GTP-U). This tunneling protocol
@@ -263,16 +263,6 @@ config NTB_NETDEV
 	tristate "Virtual Ethernet over NTB Transport"
 	depends on NTB_TRANSPORT
 
-config RMNET_IPLO
-	tristate "RMNET IPLO driver"
-	---help---
-	   This allows the creation of the rmnet ip loopback driver which is
-	   used for testing rmnet_data control and data path.
-
-	   rmnet_iplo supports most of the IOCTL's which will be defined by
-	   a physical device which uses rmnet_data. rmnet_iplo will
-	   loopback any data which is sent to it.
-
 config RIONET
 	tristate "RapidIO Ethernet over messaging driver support"
 	depends on RAPIDIO
@@ -286,15 +276,14 @@ config RIONET_RX_SIZE
 	int "Number of inbound queue entries"
 	depends on RIONET
 	default "128"
-
+ 
 #ifdef VENDOR_EDIT
 #Junyuan.Huang@PSW.CN.WiFi.Network.1471780, 2018/06/26,
 #Add for limit speed function
 config IMQ
 	tristate "IMQ (intermediate queueing device) support"
 	depends on NETDEVICES && NETFILTER
-	default y
-
+    default y
 	---help---
 	  The IMQ device(s) is used as placeholder for QoS queueing
 	  disciplines. Every packet entering/leaving the IP stack can be

@@ -11,7 +11,6 @@
 #include <linux/interrupt.h>
 #include <linux/completion.h>
 #include <linux/types.h>
-#include <linux/ktime.h>
 
 struct mmc_data;
 struct mmc_request;
@@ -114,8 +113,6 @@ struct mmc_command {
 	unsigned int		busy_timeout;	/* busy detect timeout in ms */
 	/* Set this flag only for blocking sanitize request */
 	bool			sanitize_busy;
-	/* Set this flag only for blocking bkops request */
-	bool			bkops_busy;
 
 	struct mmc_data		*data;		/* data segment associated with cmd */
 	struct mmc_request	*mrq;		/* associated request */
@@ -148,7 +145,6 @@ struct mmc_data {
 	int			sg_count;	/* mapped sg entries */
 	struct scatterlist	*sg;		/* I/O scatter list */
 	s32			host_cookie;	/* host private data */
-	bool			fault_injected; /* fault injected */
 };
 
 struct mmc_host;
@@ -168,8 +164,22 @@ struct mmc_request {
 	 */
 	void			(*recovery_notifier)(struct mmc_request *);
 	struct mmc_host		*host;
-	struct mmc_cmdq_req	*cmdq_req;
-	struct request *req;
+#ifdef CONFIG_MTK_EMMC_CQ_SUPPORT
+	struct mmc_async_req	*areq;
+	int			flags;
+	struct list_head	link;
+	struct list_head	hlist;
+#endif
+
+#if defined(CONFIG_MTK_HW_FDE) || defined(CONFIG_HIE) \
+	|| defined(CONFIG_MTK_EMMC_HW_CQ)
+	struct request		*req;
+	bool		is_mmc_req; /* request is from mmc layer */
+#endif
+
+#ifdef CONFIG_MTK_EMMC_HW_CQ
+	struct mmc_cmdq_req *cmdq_req;
+#endif
 #if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
 //yh@PSW.BSP.Storage.Emmc, 2018-09-30, Add for monitor cmdq driver wait time
 	ktime_t cmdq_request_time_start;
@@ -177,57 +187,20 @@ struct mmc_request {
 
 	/* Allow other commands during this ongoing data transfer or busy wait */
 	bool			cap_cmd_during_tfr;
-	ktime_t			io_start;
-#ifdef CONFIG_BLOCK
-	int			lat_hist_enabled;
-#endif
 
 	int			tag;
 };
 
 struct mmc_card;
-struct mmc_cmdq_req;
-
-extern int mmc_cmdq_discard_queue(struct mmc_host *host, u32 tasks);
-extern int mmc_cmdq_halt(struct mmc_host *host, bool enable);
-extern int mmc_cmdq_halt_on_empty_queue(struct mmc_host *host);
-extern void mmc_cmdq_post_req(struct mmc_host *host, int tag, int err);
-extern int mmc_cmdq_start_req(struct mmc_host *host,
-			      struct mmc_cmdq_req *cmdq_req);
-extern int mmc_cmdq_prepare_flush(struct mmc_command *cmd);
-extern int mmc_cmdq_wait_for_dcmd(struct mmc_host *host,
-			struct mmc_cmdq_req *cmdq_req);
-extern int mmc_cmdq_erase(struct mmc_cmdq_req *cmdq_req,
-	      struct mmc_card *card, unsigned int from, unsigned int nr,
-	      unsigned int arg);
-extern void mmc_check_bkops(struct mmc_card *card);
-extern void mmc_start_manual_bkops(struct mmc_card *card);
-extern int mmc_set_auto_bkops(struct mmc_card *card, bool enable);
-extern void mmc_flush_detect_work(struct mmc_host *host);
-extern int mmc_cmdq_hw_reset(struct mmc_host *host);
-extern int mmc_try_claim_host(struct mmc_host *host, unsigned int delay);
-
-extern void mmc_get_card(struct mmc_card *card);
-extern void mmc_put_card(struct mmc_card *card);
-extern void __mmc_put_card(struct mmc_card *card);
-extern void mmc_blk_init_bkops_statistics(struct mmc_card *card);
-
-extern void mmc_deferred_scaling(struct mmc_host *host);
-extern void mmc_cmdq_clk_scaling_start_busy(struct mmc_host *host,
-	bool lock_needed);
-extern void mmc_cmdq_clk_scaling_stop_busy(struct mmc_host *host,
-	bool lock_needed, bool is_cmdq_dcmd);
-extern void mmc_cmdq_up_rwsem(struct mmc_host *host);
-extern int mmc_cmdq_down_rwsem(struct mmc_host *host, struct request *rq);
-extern int __mmc_switch_cmdq_mode(struct mmc_command *cmd, u8 set, u8 index,
-				  u8 value, unsigned int timeout_ms,
-				  bool use_busy_signal, bool ignore_timeout);
 
 void mmc_wait_for_req(struct mmc_host *host, struct mmc_request *mrq);
 int mmc_wait_for_cmd(struct mmc_host *host, struct mmc_command *cmd,
 		int retries);
 
 int mmc_hw_reset(struct mmc_host *host);
+#ifdef CONFIG_MTK_EMMC_HW_CQ
+int mmc_cmdq_hw_reset(struct mmc_host *host);
+#endif
 void mmc_set_data_timeout(struct mmc_data *data, const struct mmc_card *card);
 
 #endif /* LINUX_MMC_CORE_H */

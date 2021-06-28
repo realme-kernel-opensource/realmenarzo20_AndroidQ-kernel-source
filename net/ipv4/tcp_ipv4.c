@@ -2254,7 +2254,6 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i)
 	__be32 src = inet->inet_rcv_saddr;
 	__u16 destp = ntohs(inet->inet_dport);
 	__u16 srcp = ntohs(inet->inet_sport);
-	__u8 seq_state = sk->sk_state;
 	int rx_queue;
 	int state;
 
@@ -2274,9 +2273,6 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i)
 		timer_expires = jiffies;
 	}
 
-	if (inet->transparent)
-		seq_state |= 0x80;
-
 	state = sk_state_load(sk);
 	if (state == TCP_LISTEN)
 		rx_queue = sk->sk_ack_backlog;
@@ -2288,7 +2284,7 @@ static void get_tcp4_sock(struct sock *sk, struct seq_file *f, int i)
 
 	seq_printf(f, "%4d: %08X:%04X %08X:%04X %02X %08X:%08X %02X:%08lX "
 			"%08X %5u %8d %lu %d %pK %lu %lu %u %u %d",
-		i, src, srcp, dest, destp, seq_state,
+		i, src, srcp, dest, destp, state,
 		tp->write_seq - tp->snd_una,
 		rx_queue,
 		timer_active,
@@ -2481,6 +2477,7 @@ static int __net_init tcp_sk_init(struct net *net)
 	net->ipv4.sysctl_tcp_ecn_fallback = 1;
 
 	net->ipv4.sysctl_tcp_base_mss = TCP_BASE_MSS;
+	net->ipv4.sysctl_tcp_min_snd_mss = TCP_MIN_SND_MSS;
 	net->ipv4.sysctl_tcp_probe_threshold = TCP_PROBE_THRESHOLD;
 	net->ipv4.sysctl_tcp_probe_interval = TCP_PROBE_INTERVAL;
 
@@ -2494,7 +2491,12 @@ static int __net_init tcp_sk_init(struct net *net)
 	net->ipv4.sysctl_tcp_reordering = TCP_FASTRETRANS_THRESH;
 	net->ipv4.sysctl_tcp_retries1 = TCP_RETR1;
 	net->ipv4.sysctl_tcp_retries2 = TCP_RETR2;
+#ifndef VENDOR_EDIT
+//Yongyao.Song@PSW.NW.DATA.1127822, modify for decrease power
 	net->ipv4.sysctl_tcp_orphan_retries = 0;
+#else
+	net->ipv4.sysctl_tcp_orphan_retries = TCP_ORPHAN_RETRIES;
+#endif /*VENDOR_EDIT*/
 	net->ipv4.sysctl_tcp_fin_timeout = TCP_FIN_TIMEOUT;
 	net->ipv4.sysctl_tcp_notsent_lowat = UINT_MAX;
 	net->ipv4.sysctl_tcp_tw_reuse = 0;
@@ -2513,6 +2515,8 @@ static int __net_init tcp_sk_init(struct net *net)
 	//add for [BUGID],disable tcp random timestamp,some networks limit tcp syn before login
 	net->ipv4.sysctl_tcp_random_timestamp = 1;
 	#endif /* VENDOR_EDIT */
+
+
 	return 0;
 fail:
 	tcp_sk_exit(net);

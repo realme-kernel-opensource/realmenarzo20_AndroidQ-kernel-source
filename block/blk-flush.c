@@ -548,8 +548,9 @@ int blkdev_issue_flush(struct block_device *bdev, gfp_t gfp_mask,
 		return -ENXIO;
 #ifdef VENDOR_EDIT
 	/*jason.tang@TECH.BSP.Kernel.Storage, 2019-05-20, add to count flush*/
-		sysctl_blkdev_issue_flush_count++;
+	sysctl_blkdev_issue_flush_count++;
 #endif
+
 	bio = bio_alloc(gfp_mask, 0);
 	bio_set_dev(bio, bdev);
 	bio->bi_opf = REQ_OP_WRITE | REQ_PREFLUSH;

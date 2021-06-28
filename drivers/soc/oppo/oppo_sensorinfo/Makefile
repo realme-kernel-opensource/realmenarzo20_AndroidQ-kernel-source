@@ -1,1 +1,0 @@
-obj-y	+= oppo_sensor_devinfo.o

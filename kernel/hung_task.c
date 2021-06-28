@@ -18,14 +18,9 @@
 #include <linux/suspend.h>
 #include <linux/utsname.h>
 #include <linux/sched/signal.h>
-#ifdef VENDOR_EDIT//Fanhong.Kong@ProDrv.CHG,add 2018/12/19 for DeathHealer kernel 4.14
-#include <linux/sched/clock.h>
-#include <soc/oppo/oppo_project.h>
-#endif /*VENDOR_EDIT*/
 #include <linux/sched/debug.h>
 
 #include <trace/events/sched.h>
-#include <linux/sched/sysctl.h>
 
 #if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
 // jiheng.xie@PSW.TECH.KERNEL, 2018/12/28
@@ -34,6 +29,8 @@
 #endif
 
 #ifdef VENDOR_EDIT
+#include <linux/sched/clock.h>
+#include <soc/oppo/oppo_project.h>
 /* fanhui@PhoneSW.BSP, 2016/02/02, DeathHealer, record the hung task killing
  * format: task_name,reason. e.g. system_server,uninterruptible for 60 secs
  */
@@ -47,26 +44,19 @@ char last_stopper_comm[64];
 
 #if defined(VENDOR_EDIT) && defined(CONFIG_DEATH_HEALER)
 /* Wen.Luo@BSP.Kernel.Stability, 2019/01/12, DeathHealer , Foreground background optimization,change max io count */
-/* yanghao@BSP,Kernel.Stability, 2019/11/13 for temp debug IO block problem */
-#define MAX_IO_WAIT_HUNG 3
+#define MAX_IO_WAIT_HUNG 5
 int __read_mostly sysctl_hung_task_maxiowait_count = MAX_IO_WAIT_HUNG;
 #endif
+
 /*
  * The number of tasks checked:
  */
 int __read_mostly sysctl_hung_task_check_count = PID_MAX_LIMIT;
 
-/*
- * Selective monitoring of hung tasks.
- *
- * if set to 1, khungtaskd skips monitoring tasks, which has
- * task_struct->hang_detection_enabled value not set, else monitors all tasks.
- */
-#if defined(VENDOR_EDIT) && defined(CONFIG_DEATH_HEALER)
-/* yanghao@PSW.Kernel.Stability  monitor =1 will caused phone hungtask not work */
-int sysctl_hung_task_selective_monitoring = 0;
-#else
-int sysctl_hung_task_selective_monitoring = 1;
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
+// jiheng.xie@PSW.TECH.KERNEL, 2018/12/28
+// Add for iowait hung monitor
+#include <soc/oppo/oppo_healthinfo.h>
 #endif
 
 /*
@@ -134,7 +124,6 @@ static bool is_zygote_process(struct task_struct *t)
 #endif
 
 #if defined(VENDOR_EDIT) && defined(CONFIG_DEATH_HEALER)
-extern int get_eng_version(void);
 static void check_hung_task(struct task_struct *t, unsigned long timeout, unsigned int *iowait_count)
 #else
 static void check_hung_task(struct task_struct *t, unsigned long timeout)
@@ -146,26 +135,15 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 	static unsigned long long last_death_time = 0;
 	unsigned long long cur_death_time = 0;
 	static int death_count = 0;
-	unsigned int local_iowait = 0;
 #endif /* VENDOR_EDIT */
 
 #ifdef VENDOR_EDIT
-//Haitao.Zhou@BSP.Kenrel.Stability, 2018/05/23, Modify for adding the new display thread name
-//Fanhong.Kong@ProDrv.CHG,add 2018/12/19 for 855 process 
-#define DISP_TASK_COMM_LEN_MASK 10 //SDM845 change the new display thread with multi output, use len for masking
-	if (!strncmp(t->comm, "mdss_dsi_event", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "msm-core:sampli", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "kworker/u16:1", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "kworker/u16:12", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "kworker/u16:8", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "kworker/u16:6", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "kworker/u16:7", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "mdss_fb0", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "mdss_fb_ffl0", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "opmonitor_boot", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "panic_flush", TASK_COMM_LEN) ||
-	    !strncmp(t->comm, "crtc_commit", DISP_TASK_COMM_LEN_MASK) ||
-	    !strncmp(t->comm, "crtc_event", DISP_TASK_COMM_LEN_MASK)) {
+	if(!strncmp(t->comm,"mdss_dsi_event", TASK_COMM_LEN)||
+		!strncmp(t->comm,"msm-core:sampli", TASK_COMM_LEN)||
+		!strncmp(t->comm,"kworker/u16:1", TASK_COMM_LEN) ||
+		!strncmp(t->comm,"mdss_fb0", TASK_COMM_LEN)||
+		!strncmp(t->comm,"panic_flush", TASK_COMM_LEN)||
+		!strncmp(t->comm,"mdss_fb_ffl0", TASK_COMM_LEN)){
 		return;
 	}
 #endif
@@ -209,11 +187,7 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 	//if this task blocked at iowait. so maybe we should reboot system first
 	if(t->in_iowait){
 		printk(KERN_ERR "DeathHealer io wait too long time\n");
-                if(t->mm != NULL && t == t->group_leader)// only work on user main thread
-                {
-                        *iowait_count = *iowait_count + 1;
-						local_iowait = 1;
-                }
+		*iowait_count = *iowait_count + 1;
 	}
 	if (is_zygote_process(t) || !strncmp(t->comm,"system_server", TASK_COMM_LEN)
 		|| !strncmp(t->comm,"surfaceflinger", TASK_COMM_LEN) ) {
@@ -240,17 +214,18 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 		}
 		last_death_time = cur_death_time;
 
-		if(get_eng_version() == AGING) {
+		/*zhouhengguo@psw.bsp.kernel.stablity, 2019/11/28, for aging, trigger crash*/
+		if (get_eng_version() == 1) {
 			BUG();
-		} else {
-			sched_show_task(t);
-			debug_show_held_locks(t);
-			trigger_all_cpu_backtrace();
-
-			t->flags |= PF_OPPO_KILLING;
-			do_send_sig_info(SIGKILL, SEND_SIG_FORCED, t, true);
-			wake_up_process(t);
 		}
+
+		sched_show_task(t);
+		debug_show_held_locks(t);
+		trigger_all_cpu_backtrace();
+
+		t->flags |= PF_OPPO_KILLING;
+		do_send_sig_info(SIGKILL, SEND_SIG_FORCED, t, true);
+		wake_up_process(t);
 	}
 #endif
 
@@ -258,28 +233,13 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 		console_verbose();
 		hung_task_show_lock = true;
 		hung_task_call_panic = true;
-#ifdef VENDOR_EDIT
-/* Hui.Fan@SWDP.BSP.Kernel.Debug, 2017-05-01
- * Panic on critical process D-state
- */
-		if (is_zygote_process(t) || !strncmp(t->comm,"system_server", TASK_COMM_LEN)
-			|| !strncmp(t->comm,"surfaceflinger", TASK_COMM_LEN)) {
-			trigger_all_cpu_backtrace();
-			panic("hung_task: blocked tasks");
-		}
-#endif
 	}
 
 	/*
 	 * Ok, the task did not get scheduled for more than 2 minutes,
 	 * complain:
 	 */
-#if defined(VENDOR_EDIT) && defined(CONFIG_DEATH_HEALER)
-//Zhenjian.Jiang@BSP.Kenrel.Stability, 2019/01/11, Modify for make sure we could print the stack of iowait thread before panic
-	if (sysctl_hung_task_warnings || local_iowait) {
-#else
 	if (sysctl_hung_task_warnings) {
-#endif /* VENDOR_EDIT */
 		if (sysctl_hung_task_warnings > 0)
 			sysctl_hung_task_warnings--;
 		pr_err("INFO: task %s:%d blocked for more than %ld seconds.\n",
@@ -295,6 +255,19 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout)
 	}
 
 	touch_nmi_watchdog();
+
+	if (sysctl_hung_task_panic) {
+#ifdef VENDOR_EDIT
+/* Hui.Fan@SWDP.BSP.Kernel.Debug, 2017-05-01
+ * Panic on critical process D-state
+ */
+		if (is_zygote_process(t) || !strncmp(t->comm,"system_server", TASK_COMM_LEN)
+			|| !strncmp(t->comm,"surfaceflinger", TASK_COMM_LEN)) {
+			trigger_all_cpu_backtrace();
+			panic("hung_task: blocked tasks");
+		}
+#endif
+	}
 }
 
 /*
@@ -320,7 +293,12 @@ static bool rcu_lock_break(struct task_struct *g, struct task_struct *t)
 	return can_cont;
 }
 
-#if defined (VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
+/*
+ * Check whether a TASK_UNINTERRUPTIBLE does not get woken up for
+ * a really long time (120 seconds). If that happens, print out
+ * a warning.
+ */
+#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_HEALTHINFO)
 // wenbin.liu@PSW.PLATFORM.KERNEL, 2018/12/19
 // Add for iowait hung ctrl set by QualityProtect APK RUS
 extern bool ohm_iopanic_mon_ctrl;
@@ -328,7 +306,6 @@ extern bool ohm_iopanic_mon_logon;
 extern bool ohm_iopanic_mon_trig;
 extern unsigned int  iowait_hung_cnt;
 extern unsigned int  iowait_panic_cnt;
-extern void ohm_action_trig(int type);
 #else
 bool ohm_iopanic_mon_ctrl = true;
 bool ohm_iopanic_mon_logon = false;
@@ -336,12 +313,6 @@ bool ohm_iopanic_mon_trig = false;
 unsigned int  iowait_hung_cnt = 0;
 unsigned int  iowait_panic_cnt = 0;
 #endif /*VENDOR_EDIT*/
-
-/*
- * Check whether a TASK_UNINTERRUPTIBLE does not get woken up for
- * a really long time (120 seconds). If that happens, print out
- * a warning.
- */
 static void check_hung_uninterruptible_tasks(unsigned long timeout)
 {
 	int max_count = sysctl_hung_task_check_count;
@@ -376,25 +347,29 @@ static void check_hung_uninterruptible_tasks(unsigned long timeout)
 			check_hung_task(t, timeout,&iowait_count);
 #else
 		if (t->state == TASK_UNINTERRUPTIBLE)
-			/* Check for selective monitoring */
-			if (!sysctl_hung_task_selective_monitoring ||
-			    t->hang_detection_enabled)
-				check_hung_task(t, timeout);
+			check_hung_task(t, timeout);
 #endif
 	}
  unlock:
 #if defined(VENDOR_EDIT) && defined(CONFIG_DEATH_HEALER)
-/*yixue.ge@PhoneSW.BSP,20180305,add io wait monitor*/
-// jiheng.xie@PSW.TECH.KERNEL, 2018/12/28
-// Add for iopanic monitor
-	if (iowait_count >= MAX_IO_WAIT_HUNG){
-		if (!ohm_iopanic_mon_ctrl) {
+/* yixue.ge@PhoneSW.BSP,20180305,add io wait monitor */
+/* Wen.Luo@BSP.Kernel.Stability, 2019/01/12, DeathHealer , Foreground background optimization,change max io count */
+	if(iowait_count >= sysctl_hung_task_maxiowait_count){
+		//zhouhengguo@BSP.Stabliity, 2019.11.28, add for aging version
+		if(get_eng_version() == 1) {
 			panic("hung_task:[%u]IO blocked too long time",iowait_count);
-		}else 
+		}
+		//end modify
+		if (!ohm_iopanic_mon_ctrl) {
+			//panic("hung_task:[%u]IO blocked too long time",iowait_count);
+			pr_err("hung_task:[%u]IO blocked too long time\n",iowait_count);
+		} else {
 			iowait_panic_cnt++;
+                }
 	}
-	iowait_hung_cnt += iowait_count;
+    iowait_hung_cnt += iowait_count;
 #endif
+
 	rcu_read_unlock();
 	if (hung_task_show_lock)
 		debug_show_all_locks();

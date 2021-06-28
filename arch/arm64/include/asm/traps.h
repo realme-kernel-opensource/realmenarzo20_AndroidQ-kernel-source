@@ -43,6 +43,11 @@ void arm64_notify_segfault(struct pt_regs *regs, unsigned long addr);
  */
 void arm64_skip_faulting_instruction(struct pt_regs *regs, unsigned long size);
 
+#ifdef CONFIG_MEDIATEK_SOLUTION
+int register_async_abort_handler(
+		void (*fn)(struct pt_regs *regs, void *), void *priv);
+#endif
+
 static inline int __in_irqentry_text(unsigned long ptr)
 {
 	return ptr >= (unsigned long)&__irqentry_text_start &&
@@ -59,7 +64,6 @@ static inline int in_exception_text(unsigned long ptr)
 	return in ? : __in_irqentry_text(ptr);
 }
 
-static inline void get_pct_hook_init(void) {}
 static inline int in_entry_text(unsigned long ptr)
 {
 	return ptr >= (unsigned long)&__entry_text_start &&

@@ -3094,10 +3094,6 @@ static struct sk_buff *validate_xmit_skb(struct sk_buff *skb, struct net_device 
 	if (netif_needs_gso(skb, features)) {
 		struct sk_buff *segs;
 
-		__be16 src_port = tcp_hdr(skb)->source;
-		__be16 dest_port = tcp_hdr(skb)->dest;
-
-		trace_print_skb_gso(skb, src_port, dest_port);
 		segs = skb_gso_segment(skb, features);
 		if (IS_ERR(segs)) {
 			goto out_kfree_skb;
@@ -4369,16 +4365,6 @@ static inline int nf_ingress(struct sk_buff *skb, struct packet_type **pt_prev,
 	return 0;
 }
 
-int (*gsb_nw_stack_recv)(struct sk_buff *skb) __rcu __read_mostly;
-EXPORT_SYMBOL(gsb_nw_stack_recv);
-
-int (*embms_tm_multicast_recv)(struct sk_buff *skb) __rcu __read_mostly;
-EXPORT_SYMBOL(embms_tm_multicast_recv);
-
-int (*athrs_fast_nat_recv)(struct sk_buff *skb,
-			   struct packet_type *pt_temp) __rcu __read_mostly;
-EXPORT_SYMBOL(athrs_fast_nat_recv);
-
 static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
 {
 	struct packet_type *ptype, *pt_prev;
@@ -4387,9 +4373,6 @@ static int __netif_receive_skb_core(struct sk_buff *skb, bool pfmemalloc)
 	bool deliver_exact = false;
 	int ret = NET_RX_DROP;
 	__be16 type;
-	int (*gsb_ns_recv)(struct sk_buff *skb);
-	int (*embms_recv)(struct sk_buff *skb);
-	int (*fast_recv)(struct sk_buff *skb, struct packet_type *pt_temp);
 
 	net_timestamp_check(!netdev_tstamp_prequeue, skb);
 
@@ -4446,27 +4429,7 @@ skip_taps:
 	}
 #endif
 	skb_reset_tc(skb);
-	embms_recv = rcu_dereference(embms_tm_multicast_recv);
-	if (embms_recv)
-		embms_recv(skb);
-
 skip_classify:
-	gsb_ns_recv = rcu_dereference(gsb_nw_stack_recv);
-	if (gsb_ns_recv) {
-		if (gsb_ns_recv(skb)) {
-			ret = NET_RX_SUCCESS;
-			goto out;
-		}
-	}
-
-	fast_recv = rcu_dereference(athrs_fast_nat_recv);
-	if (fast_recv) {
-		if (fast_recv(skb, pt_prev)) {
-			ret = NET_RX_SUCCESS;
-			goto out;
-		}
-	}
-
 	if (pfmemalloc && !skb_pfmemalloc_protocol(skb))
 		goto drop;
 
@@ -4752,7 +4715,6 @@ static int napi_gro_complete(struct sk_buff *skb)
 	}
 
 out:
-	__this_cpu_add(softnet_data.gro_coalesced, NAPI_GRO_CB(skb)->count > 1);
 	return netif_receive_skb_internal(skb);
 }
 
@@ -4795,7 +4757,6 @@ static void gro_list_prepare(struct napi_struct *napi, struct sk_buff *skb)
 		unsigned long diffs;
 
 		NAPI_GRO_CB(p)->flush = 0;
-		NAPI_GRO_CB(p)->flush_id = 0;
 
 		if (hash != skb_get_hash_raw(p)) {
 			NAPI_GRO_CB(p)->same_flow = 0;
@@ -4884,6 +4845,7 @@ static enum gro_result dev_gro_receive(struct napi_struct *napi, struct sk_buff 
 		NAPI_GRO_CB(skb)->encap_mark = 0;
 		NAPI_GRO_CB(skb)->recursion_counter = 0;
 		NAPI_GRO_CB(skb)->is_fou = 0;
+		NAPI_GRO_CB(skb)->is_atomic = 1;
 		NAPI_GRO_CB(skb)->gro_remcsum_start = 0;
 
 		/* Setup for GRO checksum validation */
@@ -5127,7 +5089,6 @@ static struct sk_buff *napi_frags_skb(struct napi_struct *napi)
 	skb_reset_mac_header(skb);
 	skb_gro_reset_offset(skb);
 
-	eth = skb_gro_header_fast(skb, 0);
 	if (unlikely(skb_gro_header_hard(skb, hlen))) {
 		eth = skb_gro_header_slow(skb, hlen, 0);
 		if (unlikely(!eth)) {
@@ -5137,6 +5098,7 @@ static struct sk_buff *napi_frags_skb(struct napi_struct *napi)
 			return NULL;
 		}
 	} else {
+		eth = (const struct ethhdr *)skb->data;
 		gro_pull_from_frag0(skb, hlen);
 		NAPI_GRO_CB(skb)->frag0 += hlen;
 		NAPI_GRO_CB(skb)->frag0_len -= hlen;
@@ -5197,14 +5159,8 @@ static void net_rps_send_ipi(struct softnet_data *remsd)
 	while (remsd) {
 		struct softnet_data *next = remsd->rps_ipi_next;
 
-		if (cpu_online(remsd->cpu)) {
+		if (cpu_online(remsd->cpu))
 			smp_call_function_single_async(remsd->cpu, &remsd->csd);
-		} else {
-			pr_err("%s() cpu offline\n", __func__);
-			rps_lock(remsd);
-			remsd->backlog.state = 0;
-			rps_unlock(remsd);
-		}
 		remsd = next;
 	}
 #endif
@@ -5264,7 +5220,8 @@ static int process_backlog(struct napi_struct *napi, int quota)
 			rcu_read_unlock();
 			input_queue_head_incr(sd);
 			if (++work >= quota)
-				goto state_changed;
+				return work;
+
 		}
 
 		local_irq_disable();
@@ -5287,10 +5244,6 @@ static int process_backlog(struct napi_struct *napi, int quota)
 		rps_unlock(sd);
 		local_irq_enable();
 	}
-
-state_changed:
-	napi_gro_flush(napi, false);
-	sd->current_napi = NULL;
 
 	return work;
 }
@@ -5377,19 +5330,19 @@ bool napi_complete_done(struct napi_struct *n, int work_done)
 		if (work_done)
 			timeout = n->dev->gro_flush_timeout;
 
+		/* When the NAPI instance uses a timeout and keeps postponing
+		 * it, we need to bound somehow the time packets are kept in
+		 * the GRO layer
+		 */
+		napi_gro_flush(n, !!timeout);
 		if (timeout)
 			hrtimer_start(&n->timer, ns_to_ktime(timeout),
 				      HRTIMER_MODE_REL_PINNED);
-		else
-			napi_gro_flush(n, false);
 	}
 	if (unlikely(!list_empty(&n->poll_list))) {
-		struct softnet_data *sd = this_cpu_ptr(&softnet_data);
-
 		/* If n->poll_list is not empty, we need to mask irqs */
 		local_irq_save(flags);
 		list_del_init(&n->poll_list);
-		sd->current_napi = NULL;
 		local_irq_restore(flags);
 	}
 
@@ -5645,14 +5598,6 @@ void netif_napi_del(struct napi_struct *napi)
 }
 EXPORT_SYMBOL(netif_napi_del);
 
-struct napi_struct *get_current_napi_context(void)
-{
-	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
-
-	return sd->current_napi;
-}
-EXPORT_SYMBOL(get_current_napi_context);
-
 static int napi_poll(struct napi_struct *n, struct list_head *repoll)
 {
 	void *have;
@@ -5672,9 +5617,6 @@ static int napi_poll(struct napi_struct *n, struct list_head *repoll)
 	 */
 	work = 0;
 	if (test_bit(NAPI_STATE_SCHED, &n->state)) {
-		struct softnet_data *sd = this_cpu_ptr(&softnet_data);
-
-		sd->current_napi = n;
 		work = n->poll(n, weight);
 		trace_napi_poll(n, work, weight);
 	}
@@ -7429,18 +7371,6 @@ static netdev_features_t netdev_fix_features(struct net_device *dev,
 		features &= ~dev->gso_partial_features;
 	}
 
-	if (!(features & NETIF_F_RXCSUM)) {
-		/* NETIF_F_GRO_HW implies doing RXCSUM since every packet
-		 * successfully merged by hardware must also have the
-		 * checksum verified by hardware.  If the user does not
-		 * want to enable RXCSUM, logically, we should disable GRO_HW.
-		 */
-		if (features & NETIF_F_GRO_HW) {
-			netdev_dbg(dev, "Dropping NETIF_F_GRO_HW since no RXCSUM feature.\n");
-			features &= ~NETIF_F_GRO_HW;
-		}
-	}
-
 	return features;
 }
 
@@ -7790,8 +7720,6 @@ int register_netdevice(struct net_device *dev)
 	ret = notifier_to_errno(ret);
 	if (ret) {
 		rollback_registered(dev);
-		rcu_barrier();
-
 		dev->reg_state = NETREG_UNREGISTERED;
 	}
 	/*
@@ -7904,12 +7832,27 @@ EXPORT_SYMBOL(netdev_refcnt_read);
  * We can get stuck here if buggy protocols don't correctly
  * call dev_put.
  */
+ #if defined (REFCNT_DEBUG) && defined (REFCNT_MEMORY_DEBUG)
+unsigned int trace_idx;
+EXPORT_SYMBOL(trace_idx);
+
+struct refcnt_trace trace_array[MAX_TRACE_LEN];
+EXPORT_SYMBOL(trace_array);
+#endif
+
 static void netdev_wait_allrefs(struct net_device *dev)
 {
 	unsigned long rebroadcast_time, warning_time;
 	int refcnt;
-
-	linkwatch_forget_dev(dev);
+    #if defined (REFCNT_DEBUG) && defined (REFCNT_MEMORY_DEBUG)
+    bool refcnt_trace_dump = false;
+    unsigned int idx = 0;
+    unsigned int info = 0;
+    unsigned int tmp = 0;
+    struct stack_trace trace;
+    #endif
+	
+    linkwatch_forget_dev(dev);
 
 	rebroadcast_time = warning_time = jiffies;
 	refcnt = netdev_refcnt_read(dev);
@@ -7946,13 +7889,50 @@ static void netdev_wait_allrefs(struct net_device *dev)
 
 		refcnt = netdev_refcnt_read(dev);
 
-		if (time_after(jiffies, warning_time + 10 * HZ)) {
-			pr_emerg("unregister_netdevice: waiting for %s to become free. Usage count = %d\n",
-				 dev->name, refcnt);
-			warning_time = jiffies;
-			break;
-		}
-	}
+        #ifndef VENDOR_EDIT
+        //Laixin@PSW.CN.WiFi.Basic.Switch.NA, 2019/05/27
+        //Modify for: debug wlan0 refcnt is not 0
+        if (refcnt && time_after(jiffies, warning_time + 10 * HZ)) {
+        #else /* VENDOR_EDIT */
+        if (refcnt && time_after(jiffies, warning_time + 4 * HZ)) {
+        #endif /* VENDOR_EDIT */
+            pr_emerg("unregister_netdevice: waiting for %s to become free. Usage count = %d\n",
+                dev->name, refcnt);
+            warning_time = jiffies;
+			
+            #if defined (REFCNT_DEBUG) && defined (REFCNT_MEMORY_DEBUG)
+            if (!strncmp(dev->name, "wlan0", 5) &&
+                refcnt && !refcnt_trace_dump) {
+                refcnt_trace_dump = true;
+                trace.max_entries = MAX_TRACE_DEPTH;
+                trace.skip = TRACE_SKIP_DEPTH;
+
+                pr_info("[mtk_net]====[ wlan0 refcnt backtrace begin ]===========\n");
+                for (idx = 0; idx < MAX_TRACE_LEN; idx++) {
+                    info = trace_array[idx].info;
+                    tmp = (info & 0xf0000000) >> 28;
+                    if (trace_array[idx].time &&
+                        (info & 0x00ffffff)) {
+                        pr_info("[mtk_net] %s: cpu%d_refcnt=%d, idx=%d, pid=%d, time=%ld\n",
+                            tmp == 1 ? "dev_put" :
+                            "dev_hold",
+                            (info & 0x0f000000) >> 24,
+                            trace_array[idx].refcnt,
+                            idx, info & 0x00ffffff,
+                            trace_array[idx].time);
+                            trace.nr_entries =
+                            trace_array[idx].entry_nr;
+                            trace.entries =
+                            trace_array[idx].entry;
+                            print_stack_trace(&trace, 0);
+                            msleep(1);
+                    }
+                }
+                pr_info("[mtk_net]====[ wlan0 refcnt backtrace end ]===========\n");
+            }
+            #endif
+        }
+    }
 }
 
 /* The sequence is:
@@ -8014,9 +7994,9 @@ void netdev_run_todo(void)
 		netdev_wait_allrefs(dev);
 
 		/* paranoia */
-		WARN_ON(netdev_refcnt_read(dev));
-		WARN_ON(!list_empty(&dev->ptype_all));
-		WARN_ON(!list_empty(&dev->ptype_specific));
+		BUG_ON(netdev_refcnt_read(dev));
+		BUG_ON(!list_empty(&dev->ptype_all));
+		BUG_ON(!list_empty(&dev->ptype_specific));
 		WARN_ON(rcu_access_pointer(dev->ip_ptr));
 		WARN_ON(rcu_access_pointer(dev->ip6_ptr));
 		WARN_ON(dev->dn_ptr);
@@ -8747,6 +8727,8 @@ static void __net_exit default_device_exit(struct net *net)
 
 		/* Push remaining network devices to init_net */
 		snprintf(fb_name, IFNAMSIZ, "dev%d", dev->ifindex);
+		if (__dev_get_by_name(&init_net, fb_name))
+			snprintf(fb_name, IFNAMSIZ, "dev%%d");
 		err = dev_change_net_namespace(dev, &init_net, fb_name);
 		if (err) {
 			pr_emerg("%s: failed to move %s to init_net: %d\n",

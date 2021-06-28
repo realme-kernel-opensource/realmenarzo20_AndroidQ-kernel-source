@@ -19,18 +19,11 @@
 #include <linux/shmem_fs.h>
 #include <linux/uaccess.h>
 #include <linux/mm_inline.h>
-#include <linux/ctype.h>
 
 #include <asm/elf.h>
 #include <asm/tlb.h>
 #include <asm/tlbflush.h>
 #include "internal.h"
-#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM) && defined(CONFIG_OPPO_SPECIAL_BUILD)
-/* Kui.Zhang@PSW.TEC.Kernel.Performance, 2019/02/27
- * collect running time during process reclaim
- */
-#include <linux/sched/clock.h>
-#endif
 
 void task_mem(struct seq_file *m, struct mm_struct *mm)
 {
@@ -260,7 +253,6 @@ static void *m_start(struct seq_file *m, loff_t *ppos)
 	return NULL;
 }
 
-
 static void *m_next(struct seq_file *m, void *v, loff_t *pos)
 {
 	struct proc_maps_private *priv = m->private;
@@ -458,7 +450,6 @@ static const struct seq_operations proc_tid_maps_op = {
 	.show	= show_tid_map
 };
 
-
 static int pid_maps_open(struct inode *inode, struct file *file)
 {
 	return do_maps_open(inode, file, &proc_pid_maps_op);
@@ -468,7 +459,6 @@ static int tid_maps_open(struct inode *inode, struct file *file)
 {
 	return do_maps_open(inode, file, &proc_tid_maps_op);
 }
-
 
 const struct file_operations proc_pid_maps_operations = {
 	.open		= pid_maps_open,
@@ -483,7 +473,6 @@ const struct file_operations proc_tid_maps_operations = {
 	.llseek		= seq_lseek,
 	.release	= proc_map_release,
 };
-
 
 /*
  * Proportional Set Size(PSS): my share of RSS.
@@ -873,7 +862,7 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 	/* mmap_sem is held in m_start */
 	walk_page_vma(vma, &smaps_walk);
 
-    #ifdef VENDOR_EDIT //yixue.ge@bsp.drv modify for android.bg get pss too slow
+	#ifdef VENDOR_EDIT //yixue.ge@bsp.drv modify for android.bg get pss too slow
 	if (strcmp(current->comm, "android.bg") == 0) {
 		if ((unsigned long)(mss->pss >> (10 + PSS_SHIFT)) > 0) {
 			seq_printf(m,
@@ -890,15 +879,10 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 				"Private_Dirty:  %8lu kB\n",
 				mss->private_dirty >> 10);
 		}
-		if ((unsigned long)(mss->swap_pss >> (10 + PSS_SHIFT)) > 0) {
-                       seq_printf(m,
-                       "SwapPss:        %8lu kB\n",
-                       (unsigned long)(mss->swap_pss >> (10 + PSS_SHIFT)));
-		}
 		m_cache_vma(m, vma);
 		return 0;
 	}
-    #endif /*VENDOR_EDIT*/
+	#endif /*VENDOR_EDIT*/
 
 	if (!rollup_mode) {
 		show_map_vma(m, vma, is_pid);
@@ -914,12 +898,6 @@ static int show_smap(struct seq_file *m, void *v, int is_pid)
 		seq_puts(m, "[rollup]\n");
 	} else {
 		ret = SEQ_SKIP;
-	}
-
-	if (vma_get_anon_name(vma)) {
-		seq_puts(m, "Name:           ");
-		seq_print_vma_name(m, vma);
-		seq_putc(m, '\n');
 	}
 
 	if (!rollup_mode)
@@ -1288,7 +1266,8 @@ static ssize_t clear_refs_write(struct file *file, const char __user *buf,
 				for (vma = mm->mmap; vma; vma = vma->vm_next) {
 					vm_write_begin(vma);
 					WRITE_ONCE(vma->vm_flags,
-						vma->vm_flags & ~VM_SOFTDIRTY);
+						   vma->vm_flags &
+						   ~VM_SOFTDIRTY);
 					vma_set_page_prot(vma);
 					vm_write_end(vma);
 				}
@@ -1718,7 +1697,7 @@ const struct file_operations proc_pagemap_operations = {
 #endif /* CONFIG_PROC_PAGE_MONITOR */
 
 #ifdef CONFIG_PROCESS_RECLAIM
-#ifdef VENDOR_EDIT
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
 /* Kui.Zhang@TEC.Kernel.Performance, 2019/03/04
  * Each reclaim lasts up to 333ms, will stop immediately if overtime.
  */
@@ -1726,35 +1705,120 @@ const struct file_operations proc_pagemap_operations = {
 #define RECLAIM_PAGE_NUM 1024ul
 #endif
 
-static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
+static int deactivate_pte_range(pmd_t *pmd, unsigned long addr,
 				unsigned long end, struct mm_walk *walk)
 {
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
 	struct reclaim_param *rp = walk->private;
 	struct vm_area_struct *vma = rp->vma;
+	int ret = 0;
+#else
+	struct vm_area_struct *vma = walk->private;
+#endif
+	pte_t *pte, ptent;
+	spinlock_t *ptl;
+	struct page *page;
+
+	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
+	for (; addr < end; pte++, addr += PAGE_SIZE) {
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
+		/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-12-25, check whether the
+		 * reclaim process should cancel*/
+		if (rp->reclaimed_task &&
+				(ret = is_reclaim_addr_over(walk, addr))) {
+			ret = -ret;
+			break;
+		}
+#endif
+		ptent = *pte;
+
+		if (pte_none(ptent))
+			continue;
+
+		if (!pte_present(ptent))
+			continue;
+
+		page = vm_normal_page(vma, addr, ptent);
+		if (!page)
+			continue;
+		/*
+		 * XXX: we don't handle compound page at this moment but
+		 * it should revisit for THP page before upstream.
+		 */
+		if (PageCompound(page)) {
+			unsigned int order = compound_order(page);
+			unsigned int nr_pages = (1 << order) - 1;
+
+			addr += (nr_pages * PAGE_SIZE);
+			pte += nr_pages;
+			continue;
+		}
+
+		if (page_mapcount(page) > 1)
+			continue;
+
+		ptep_test_and_clear_young(vma, addr, pte);
+		test_and_clear_page_young(page);
+		if (PageReferenced(page))
+			ClearPageReferenced(page);
+		if (PageActive(page))
+			deactivate_file_page(page);
+
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
+		rp->nr_reclaimed++;
+		rp->nr_to_reclaim--;
+		if (rp->nr_to_reclaim == 0)
+			break;
+#endif
+	}
+	pte_unmap_unlock(pte - 1, ptl);
+
+	cond_resched();
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
+	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-12-25, if want to cancel,
+	 * if ret <0 means need jump out of the loop immediately
+	 */
+	if (ret < 0)
+		return ret;
+	if (!rp->nr_to_reclaim)
+		return -PR_FULL;
+#endif
+	return 0;
+}
+
+static int reclaim_pte_range(pmd_t *pmd, unsigned long addr,
+		unsigned long end, struct mm_walk *walk)
+{
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
+	struct reclaim_param *rp = walk->private;
+	struct vm_area_struct *vma = rp->vma;
+	int reclaimed;
+	int ret = 0;
+#else
+	struct vm_area_struct *vma = walk->private;
+#endif
 	pte_t *pte, ptent;
 	spinlock_t *ptl;
 	struct page *page;
 	LIST_HEAD(page_list);
 	int isolated;
-	int reclaimed;
-#ifdef VENDOR_EDIT
-	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-12-25, if want to cancel,
-	 * return nonzero will junp out of the loop*/
-	int ret = 0;
-#endif
 
 	split_huge_pmd(vma, addr, pmd);
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
 	if (pmd_trans_unstable(pmd) || !rp->nr_to_reclaim)
+#else
+	if (pmd_trans_unstable(pmd))
+#endif
 		return 0;
 cont:
 	isolated = 0;
 	pte = pte_offset_map_lock(vma->vm_mm, pmd, addr, &ptl);
 	for (; addr != end; pte++, addr += PAGE_SIZE) {
-#ifdef VENDOR_EDIT
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
 		/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-12-25, check whether the
 		 * reclaim process should cancel*/
 		if (rp->reclaimed_task &&
-			(ret = is_reclaim_addr_over(walk, addr))) {
+				(ret = is_reclaim_addr_over(walk, addr))) {
 			ret = -ret;
 			break;
 		}
@@ -1771,48 +1835,34 @@ cont:
 		/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
 		 * we don't reclaim page in active lru list */
 		if (rp->inactive_lru && (PageActive(page) ||
-			PageUnevictable(page)))
+					PageUnevictable(page)))
 			continue;
 #endif
 
 		if (isolate_lru_page(page))
 			continue;
 
-		/* MADV_FREE clears pte dirty bit and then marks the page
-		 * lazyfree (clear SwapBacked). Inbetween if this lazyfreed page
-		 * is touched by user then it becomes dirty.  PPR in
-		 * shrink_page_list in try_to_unmap finds the page dirty, marks
-		 * it back as PageSwapBacked and skips reclaim. This can cause
-		 * isolated count mismatch.
-		 */
-		if (PageAnon(page) && !PageSwapBacked(page)) {
-			putback_lru_page(page);
-			continue;
-		}
-
 		list_add(&page->lru, &page_list);
-		inc_node_page_state(page, NR_ISOLATED_ANON +
-				page_is_file_cache(page));
 		isolated++;
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
 		rp->nr_scanned++;
 		if ((isolated >= SWAP_CLUSTER_MAX) || !rp->nr_to_reclaim)
 			break;
+#else
+		if (isolated >= SWAP_CLUSTER_MAX)
+			break;
+#endif
 	}
 	pte_unmap_unlock(pte - 1, ptl);
-#ifdef VENDOR_EDIT
+#if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
 	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-12-25, check whether the
 	 * reclaim process should cancel*/
 	reclaimed = reclaim_pages_from_list(&page_list, vma, walk);
-#else
-	reclaimed = reclaim_pages_from_list(&page_list, vma);
-#endif
-
 	rp->nr_reclaimed += reclaimed;
 	rp->nr_to_reclaim -= reclaimed;
 	if (rp->nr_to_reclaim < 0)
 		rp->nr_to_reclaim = 0;
 
-#ifdef VENDOR_EDIT
 	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-12-25, if want to cancel,
 	 * if ret <0 means need jump out of the loop immediately
 	 */
@@ -1820,13 +1870,12 @@ cont:
 		return ret;
 	if (!rp->nr_to_reclaim)
 		return -PR_FULL;
+#else
+	reclaim_pages_from_list(&page_list, vma);
+#endif
 	if (addr != end)
 		goto cont;
-#else
-	if (rp->nr_to_reclaim && (addr != end))
-		goto cont;
 	cond_resched();
-#endif
 	return 0;
 }
 
@@ -1844,112 +1893,7 @@ enum reclaim_type {
 #endif
 };
 
-#if defined(VENDOR_EDIT) && defined(CONFIG_OPPO_SPECIAL_BUILD)
-struct reclaim_info {
-	char comm[TASK_COMM_LEN];
-	enum reclaim_type type;
-	int nr_reclaimed;
-	int nr_scanned;
-	unsigned long delay_ms;
-	unsigned long nvcsw;
-	unsigned long nivcsw;
-	unsigned long running_ms;
-	unsigned long intr_ms;
-	unsigned long stop_addr;
-	int ahead;
-	int release_sem_cnt;
-};
-
-static struct reclaim_info ri_task;
-
-int reclaim_info_show(struct seq_file *s, void *unused)
-{
-	seq_printf(s, "[ %s %d %d ],[ %d %d ],[ %lu %lu ],[ %lu %lu %lu ],[ %#lx %lu %u ]\n",
-			ri_task.comm, ri_task.type, ri_task.ahead,
-			ri_task.nr_scanned, ri_task.nr_reclaimed,
-			ri_task.nivcsw, ri_task.nvcsw,
-			ri_task.delay_ms, ri_task.running_ms, ri_task.intr_ms,
-			ri_task.stop_addr, RECLAIM_PAGE_NUM,
-			jiffies_to_msecs(RECLAIM_TIMEOUT_JIFFIES));
-	return 0;
-}
-EXPORT_SYMBOL(reclaim_info_show);
-
-static int write_process_reclaim_info(char* msg)
-{
-        struct file *fp;
-        mm_segment_t fs;
-        loff_t pos;
-
-        fp = filp_open("/sdcard/proces_reclaim_info.txt",
-			O_RDWR | O_CREAT, 0644);
-        if (IS_ERR(fp)) {
-                pr_err("KABLE create /sdcard/proces_reclaim_info.txt failed\n");
-                return -1;
-        }
-
-        fs = get_fs();
-        set_fs(KERNEL_DS);
-        pos = vfs_llseek(fp, 0, SEEK_END);
-        vfs_write(fp, msg, strlen(msg), &pos);
-        filp_close(fp, NULL);
-        set_fs(fs);
-        return 0;
-}
-#endif /* VENDOR_EDIT && CONFIG_OPPO_SPECIAL_BUILD */
-
-struct reclaim_param reclaim_task_anon(struct task_struct *task,
-		int nr_to_reclaim)
-{
-	struct mm_struct *mm;
-	struct vm_area_struct *vma;
-	struct mm_walk reclaim_walk = {};
-	struct reclaim_param rp = {
-		.nr_to_reclaim = nr_to_reclaim,
-	};
-
 #if defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE)
-	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
-	 * reclaim all active and inactive pages here */
-	rp.inactive_lru = false;
-	rp.reclaimed_task = NULL;
-#endif
-
-	get_task_struct(task);
-	mm = get_task_mm(task);
-	if (!mm)
-		goto out;
-
-	reclaim_walk.mm = mm;
-	reclaim_walk.pmd_entry = reclaim_pte_range;
-
-	reclaim_walk.private = &rp;
-
-	down_read(&mm->mmap_sem);
-	for (vma = mm->mmap; vma; vma = vma->vm_next) {
-		if (is_vm_hugetlb_page(vma))
-			continue;
-
-		if (vma->vm_file)
-			continue;
-
-		if (!rp.nr_to_reclaim)
-			break;
-
-		rp.vma = vma;
-		walk_page_range(vma->vm_start, vma->vm_end,
-			&reclaim_walk);
-	}
-
-	flush_tlb_mm(mm);
-	up_read(&mm->mmap_sem);
-	mmput(mm);
-out:
-	put_task_struct(task);
-	return rp;
-}
-
-#ifdef VENDOR_EDIT
 /* Kui.Zhang@PSW.BSP.Kernel.Performance, 2019-01-01,
  * Extract the reclaim core code for /proc/process_reclaim use*/
 ssize_t reclaim_task_write(struct task_struct* task, char *buffer)
@@ -1959,28 +1903,14 @@ ssize_t reclaim_task_write(struct task_struct* task, char *buffer)
 	enum reclaim_type type;
 	char *type_buf;
 	struct mm_walk reclaim_walk = {};
-	unsigned long start = 0;
-	unsigned long end = 0;
 	struct reclaim_param rp;
 	int err = 0;
-#ifdef CONFIG_OPPO_SPECIAL_BUILD
-	int scan_vma_cnt = 0;
-	int nr_scanned = 0;
-	int nr_reclaimed = 0;
-	int release_sem_cnt = 0;
-	unsigned long start_ns;
-	unsigned long nvcsw_start, nivcsw_start;
-	unsigned long run_ms;
-	unsigned long before_scan_addr;
-	struct timeval tv;
-	char msg[256] = {0};
-#endif
 
 	/* Kui.Zhang@TEC.Kernel.Performance, 2019/03/04
 	 * Do not reclaim self
 	 */
 	if (task == current->group_leader)
-		goto out_err;
+		return -EINVAL;
 
 	type_buf = strstrip(buffer);
 	if (!strcmp(type_buf, "file"))
@@ -1989,7 +1919,6 @@ ssize_t reclaim_task_write(struct task_struct* task, char *buffer)
 		type = RECLAIM_ANON;
 	else if (!strcmp(type_buf, "all"))
 		type = RECLAIM_ALL;
-#ifdef CONFIG_PROCESS_RECLAIM_ENHANCE
 	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
 	 * Check the input reclaim option is inactive
 	 */
@@ -1999,57 +1928,22 @@ ssize_t reclaim_task_write(struct task_struct* task, char *buffer)
 		type = RECLAIM_INACTIVE_FILE;
 	else if (!strcmp(type_buf, "inactive_anon"))
 		type = RECLAIM_INACTIVE_ANON;
-#endif
-	else if (isdigit(*type_buf))
-		type = RECLAIM_RANGE;
 	else
-		goto out_err;
-
-	if (type == RECLAIM_RANGE) {
-		char *token;
-		unsigned long long len, len_in, tmp;
-		token = strsep(&type_buf, " ");
-		if (!token)
-			goto out_err;
-		tmp = memparse(token, &token);
-		if (tmp & ~PAGE_MASK || tmp > ULONG_MAX)
-			goto out_err;
-		start = tmp;
-
-		token = strsep(&type_buf, " ");
-		if (!token)
-			goto out_err;
-		len_in = memparse(token, &token);
-		len = (len_in + ~PAGE_MASK) & PAGE_MASK;
-		if (len > ULONG_MAX)
-			goto out_err;
-		/*
-		 * Check to see whether len was rounded up from small -ve
-		 * to zero.
-		 */
-		if (len_in && !len)
-			goto out_err;
-
-		end = start + len;
-		if (end < start)
-			goto out_err;
-	}
+		return -EINVAL;
 
 	mm = get_task_mm(task);
 	if (!mm)
-		goto out;
+		return -EINVAL;
 
-#ifdef CONFIG_PROCESS_RECLAIM_ENHANCE
 	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
 	 * Flag that relcaim inactive pages only in reclaim_pte_range
 	 */
 	if ((type == RECLAIM_INACTIVE) ||
-		(type == RECLAIM_INACTIVE_FILE) ||
-		(type == RECLAIM_INACTIVE_ANON))
+			(type == RECLAIM_INACTIVE_FILE) ||
+			(type == RECLAIM_INACTIVE_ANON))
 		rp.inactive_lru = true;
 	else
 		rp.inactive_lru = false;
-#endif
 
 	reclaim_walk.mm = mm;
 	reclaim_walk.pmd_entry = reclaim_pte_range;
@@ -2061,170 +1955,65 @@ ssize_t reclaim_task_write(struct task_struct* task, char *buffer)
 	current->flags |= PF_RECLAIM_SHRINK;
 	rp.reclaimed_task = task;
 	current->reclaim.stop_jiffies = jiffies + RECLAIM_TIMEOUT_JIFFIES;
-#ifdef  CONFIG_OPPO_SPECIAL_BUILD
-	start_ns = sched_clock();
-	current->reclaim_run_ns = 0UL;
-	current->reclaim_intr_ns = 0UL;
-	current->reclaim_ns = start_ns;
-	nvcsw_start = current->nvcsw;
-	nivcsw_start = current->nivcsw;
-	before_scan_addr = task->reclaim.stop_scan_addr;
-#endif
-
 cont:
 	rp.nr_to_reclaim = RECLAIM_PAGE_NUM;
 	rp.nr_reclaimed = 0;
 	rp.nr_scanned = 0;
 
 	down_read(&mm->mmap_sem);
-	if (type == RECLAIM_RANGE) {
-		vma = find_vma(mm, start);
-		while (vma) {
-			if (vma->vm_start > end)
-				break;
-			if (is_vm_hugetlb_page(vma))
-				continue;
+	for (vma = mm->mmap; vma; vma = vma->vm_next) {
 
-			rp.vma = vma;
-			walk_page_range(max(vma->vm_start, start),
-					min(vma->vm_end, end),
-					&reclaim_walk);
-			vma = vma->vm_next;
-		}
-	} else {
-#ifdef CONFIG_OPPO_SPECIAL_BUILD
-		ri_task.stop_addr = task->reclaim.stop_scan_addr;
-#endif
-		for (vma = mm->mmap; vma; vma = vma->vm_next) {
-			if (vma->vm_end <= task->reclaim.stop_scan_addr)
-				continue;
+		if (vma->vm_flags & VM_LOCKED)
+			continue;
 
-			if (is_vm_hugetlb_page(vma))
-				continue;
+		if (is_vm_hugetlb_page(vma))
+			continue;
 
-			/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
-			 * Jump out of the reclaim flow immediately
-			 */
-			err = is_reclaim_addr_over(&reclaim_walk, vma->vm_start);
-			if (err) {
-				err = -err;
-				break;
-			}
-
-#ifdef CONFIG_PROCESS_RECLAIM_ENHANCE
-			/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
-			 * filter only reclaim anon pages
-			 */
-			if ((type == RECLAIM_ANON ||
-				type == RECLAIM_INACTIVE_ANON) && vma->vm_file)
-#else
-			if (type == RECLAIM_ANON && vma->vm_file)
-#endif
-				continue;
-
-#ifdef CONFIG_PROCESS_RECLAIM_ENHANCE
-			/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
-			 * filter only reclaim file-backed pages
-			 */
-			if ((type == RECLAIM_FILE ||
-				type == RECLAIM_INACTIVE_FILE) && !vma->vm_file)
-#else
-			if (type == RECLAIM_FILE && !vma->vm_file)
-#endif
-				continue;
-
-			rp.vma = vma;
-#ifdef CONFIG_OPPO_SPECIAL_BUILD
-			scan_vma_cnt++;
-#endif
-			if (vma->vm_start < task->reclaim.stop_scan_addr)
-				err = walk_page_range(
-					task->reclaim.stop_scan_addr,
-					vma->vm_end, &reclaim_walk);
-			else
-				err = walk_page_range(vma->vm_start,
-						vma->vm_end, &reclaim_walk);
-
-			if (err < 0)
-				break;
+		/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
+		 * Jump out of the reclaim flow immediately
+		 */
+		err = is_reclaim_addr_over(&reclaim_walk, vma->vm_start);
+		if (err) {
+			err = -err;
+			break;
 		}
 
-		if (err != -PR_ADDR_OVER)
-			task->reclaim.stop_scan_addr = vma ? vma->vm_start : 0;
+		/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
+		 * filter only reclaim anon pages
+		 */
+		if ((type == RECLAIM_ANON ||
+					type == RECLAIM_INACTIVE_ANON) && vma->vm_file)
+			continue;
+
+		/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-11-07,
+		 * filter only reclaim file-backed pages
+		 */
+		if ((type == RECLAIM_FILE ||
+					type == RECLAIM_INACTIVE_FILE) && !vma->vm_file)
+			continue;
+
+		rp.vma = vma;
+		if (!vma->vm_file || rp.inactive_lru)
+			reclaim_walk.pmd_entry = reclaim_pte_range;
+		else
+			reclaim_walk.pmd_entry = deactivate_pte_range;
+
+		err = walk_page_range(vma->vm_start, vma->vm_end,
+				&reclaim_walk);
+		if (err < 0)
+			break;
 	}
+	if (err != -PR_ADDR_OVER)
+		task->reclaim.stop_scan_addr = vma ? vma->vm_start : 0;
 
 	flush_tlb_mm(mm);
 	up_read(&mm->mmap_sem);
-
-#ifdef CONFIG_OPPO_SPECIAL_BUILD
-	release_sem_cnt++;
-
-	// record the reclaim result
-	nr_reclaimed += rp.nr_reclaimed;
-	nr_scanned += rp.nr_scanned;
-	run_ms = (sched_clock() - start_ns)/1000000UL;
-	if (unlikely(run_ms > 500UL)) {
-		do_gettimeofday(&tv);
-		snprintf(msg, 256, "[%lu.%-6lu][ %s %d %d ],[ %d %d %d %d ],[ %lu %lu ],[ %lu %lu %lu ],[ %#lx %#lx %lu %u ]\n",
-				tv.tv_sec, tv.tv_usec,
-				task->comm, type, err,
-				rp.nr_scanned, rp.nr_reclaimed,
-				release_sem_cnt, scan_vma_cnt,
-				current->nivcsw - nivcsw_start,
-				current->nvcsw - nvcsw_start, run_ms,
-				current->reclaim_run_ns/1000000UL,
-				current->reclaim_intr_ns/1000000UL,
-				ri_task.stop_addr, task->reclaim.stop_scan_addr,
-				RECLAIM_PAGE_NUM,
-				jiffies_to_msecs(RECLAIM_TIMEOUT_JIFFIES));
-		(void)write_process_reclaim_info(msg);
-	}
-#endif
-	/* If not timeout and not reach the mmap end, continue
-	 */
-	if (((err == PR_PASS) || (err == -PR_ADDR_OVER) ||
-			(err == -PR_FULL)) && vma)
-		goto cont;
-
-#ifdef CONFIG_OPPO_SPECIAL_BUILD
-	memcpy(ri_task.comm, task->comm, TASK_COMM_LEN);
-	ri_task.delay_ms = run_ms;
-	ri_task.nr_reclaimed = nr_reclaimed;
-	ri_task.nr_scanned = nr_scanned;
-	ri_task.type = type;
-	ri_task.nvcsw = current->nvcsw - nvcsw_start;
-	ri_task.nivcsw = current->nivcsw - nivcsw_start;
-	ri_task.running_ms = current->reclaim_run_ns/1000000UL;
-	ri_task.intr_ms = current->reclaim_intr_ns/1000000UL;
-	ri_task.ahead = err;
-	ri_task.release_sem_cnt = release_sem_cnt;
-	ri_task.stop_addr = before_scan_addr;
-	do_gettimeofday(&tv);
-	snprintf(msg, 256, "[%lu.%-6lu][ %s %d %d ],[ %d %d %d %d ],[ %lu %lu ],[ %lu %lu %lu ],[ %#lx %#lx %lu %u ]**\n",
-			tv.tv_sec, tv.tv_usec,
-			ri_task.comm, ri_task.type, ri_task.ahead,
-			nr_scanned, nr_reclaimed, release_sem_cnt,
-			scan_vma_cnt,
-			ri_task.nivcsw, ri_task.nvcsw,
-			ri_task.delay_ms, ri_task.running_ms, ri_task.intr_ms,
-			before_scan_addr, task->reclaim.stop_scan_addr,
-			RECLAIM_PAGE_NUM,
-			jiffies_to_msecs(RECLAIM_TIMEOUT_JIFFIES));
-	(void)write_process_reclaim_info(msg);
-#endif
-
-	/* Kui.Zhang@PSW.BSP.Kernel.Performance, 2018-12-25, clear the flags*/
-	current->flags &= ~PF_RECLAIM_SHRINK;
 	mmput(mm);
-out:
 	return 0;
-
-out_err:
-	return -EINVAL;
 }
 
 static ssize_t reclaim_write(struct file *file, const char __user *buf,
-				size_t count, loff_t *ppos)
+		size_t count, loff_t *ppos)
 {
 	struct task_struct *task;
 	char buffer[200];
@@ -2252,15 +2041,11 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 				size_t count, loff_t *ppos)
 {
 	struct task_struct *task;
-	char buffer[200];
+	char buffer[PROC_NUMBUF];
 	struct mm_struct *mm;
 	struct vm_area_struct *vma;
 	enum reclaim_type type;
 	char *type_buf;
-	struct mm_walk reclaim_walk = {};
-	unsigned long start = 0;
-	unsigned long end = 0;
-	struct reclaim_param rp;
 
 	memset(buffer, 0, sizeof(buffer));
 	if (count > sizeof(buffer) - 1)
@@ -2276,100 +2061,52 @@ static ssize_t reclaim_write(struct file *file, const char __user *buf,
 		type = RECLAIM_ANON;
 	else if (!strcmp(type_buf, "all"))
 		type = RECLAIM_ALL;
-	else if (isdigit(*type_buf))
-		type = RECLAIM_RANGE;
 	else
-		goto out_err;
-
-	if (type == RECLAIM_RANGE) {
-		char *token;
-		unsigned long long len, len_in, tmp;
-
-		token = strsep(&type_buf, " ");
-		if (!token)
-			goto out_err;
-		tmp = memparse(token, &token);
-		if (tmp & ~PAGE_MASK || tmp > ULONG_MAX)
-			goto out_err;
-		start = tmp;
-
-		token = strsep(&type_buf, " ");
-		if (!token)
-			goto out_err;
-		len_in = memparse(token, &token);
-		len = (len_in + ~PAGE_MASK) & PAGE_MASK;
-		if (len > ULONG_MAX)
-			goto out_err;
-		/*
-		 * Check to see whether len was rounded up from small -ve
-		 * to zero.
-		 */
-		if (len_in && !len)
-			goto out_err;
-
-		end = start + len;
-		if (end < start)
-			goto out_err;
-	}
+		return -EINVAL;
 
 	task = get_proc_task(file->f_path.dentry->d_inode);
 	if (!task)
 		return -ESRCH;
 
 	mm = get_task_mm(task);
-	if (!mm)
-		goto out;
+	if (mm) {
+		struct mm_walk reclaim_walk = {
+			.pmd_entry = reclaim_pte_range,
+			.mm = mm,
+		};
 
-	reclaim_walk.mm = mm;
-	reclaim_walk.pmd_entry = reclaim_pte_range;
+		down_read(&mm->mmap_sem);
+		for (vma = mm->mmap; vma; vma = vma->vm_next) {
+			reclaim_walk.private = vma;
 
-	rp.nr_to_reclaim = INT_MAX;
-	rp.nr_reclaimed = 0;
-	reclaim_walk.private = &rp;
-
-	down_read(&mm->mmap_sem);
-	if (type == RECLAIM_RANGE) {
-		vma = find_vma(mm, start);
-		while (vma) {
-			if (vma->vm_start > end)
-				break;
-			if (is_vm_hugetlb_page(vma))
+			if (vma->vm_flags & VM_LOCKED)
 				continue;
 
-			rp.vma = vma;
-			walk_page_range(max(vma->vm_start, start),
-					min(vma->vm_end, end),
-					&reclaim_walk);
-			vma = vma->vm_next;
-		}
-	} else {
-		for (vma = mm->mmap; vma; vma = vma->vm_next) {
 			if (is_vm_hugetlb_page(vma))
 				continue;
 
 			if (type == RECLAIM_ANON && vma->vm_file)
 				continue;
-
 			if (type == RECLAIM_FILE && !vma->vm_file)
 				continue;
 
-			rp.vma = vma;
+			if (!vma->vm_file)
+				reclaim_walk.pmd_entry = reclaim_pte_range;
+			else
+				reclaim_walk.pmd_entry = deactivate_pte_range;
+
 			walk_page_range(vma->vm_start, vma->vm_end,
-				&reclaim_walk);
+					&reclaim_walk);
 		}
+		flush_tlb_mm(mm);
+		up_read(&mm->mmap_sem);
+		mmput(mm);
 	}
-
-	flush_tlb_mm(mm);
-	up_read(&mm->mmap_sem);
-	mmput(mm);
-out:
 	put_task_struct(task);
-	return count;
 
-out_err:
-	return -EINVAL;
+	return count;
 }
-#endif /* VENDOR_EDIT */
+#endif /* defined(VENDOR_EDIT) && defined(CONFIG_PROCESS_RECLAIM_ENHANCE) */
 
 const struct file_operations proc_reclaim_operations = {
 	.write		= reclaim_write,

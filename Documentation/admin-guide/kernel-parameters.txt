@@ -426,10 +426,6 @@
 			embedded devices based on command line input.
 			See Documentation/block/cmdline-partition.txt
 
-	boot_cpus=	[SMP]
-			Rather than attempting to online all possible CPUs at
-			boot time, only online the specified set of CPUs.
-
 	boot_delay=	Milliseconds to delay each printk during boot.
 			Values larger than 10 seconds (10000) are changed to
 			no delay (0).
@@ -840,11 +836,6 @@
 			Can be useful to work around chipset bugs.
 
 	dis_ucode_ldr	[X86] Disable the microcode loader.
-
-	dm=		[DM] Allows early creation of a device-mapper device.
-			See Documentation/device-mapper/boot.txt.
-
-	dmasound=	[HW,OSS] Sound subsystem buff
 
 	dma_debug=off	If the kernel is compiled with DMA_API_DEBUG support,
 			this option disables the debugging code at boot.
@@ -2371,6 +2362,41 @@
 			in the "bleeding edge" mini2440 support kernel at
 			http://repo.or.cz/w/linux-2.6/mini2440.git
 
+	mitigations=
+			[X86,PPC,S390] Control optional mitigations for CPU
+			vulnerabilities.  This is a set of curated,
+			arch-independent options, each of which is an
+			aggregation of existing arch-specific options.
+
+			off
+				Disable all optional CPU mitigations.  This
+				improves system performance, but it may also
+				expose users to several CPU vulnerabilities.
+				Equivalent to: nopti [X86,PPC]
+					       nospectre_v1 [PPC]
+					       nobp=0 [S390]
+					       nospectre_v1 [X86]
+					       nospectre_v2 [X86,PPC,S390]
+					       spectre_v2_user=off [X86]
+					       spec_store_bypass_disable=off [X86,PPC]
+					       l1tf=off [X86]
+					       mds=off [X86]
+
+			auto (default)
+				Mitigate all CPU vulnerabilities, but leave SMT
+				enabled, even if it's vulnerable.  This is for
+				users who don't want to be surprised by SMT
+				getting disabled across kernel upgrades, or who
+				have other ways of avoiding SMT-based attacks.
+				Equivalent to: (default behavior)
+
+			auto,nosmt
+				Mitigate all CPU vulnerabilities, disabling SMT
+				if needed.  This is for users who always want to
+				be fully mitigated, even if it means losing SMT.
+				Equivalent to: l1tf=flush,nosmt [X86]
+					       mds=full,nosmt [X86]
+
 	mminit_loglevel=
 			[KNL] When CONFIG_DEBUG_MEMORY_INIT is set, this
 			parameter allows control of the logging verbosity for
@@ -2689,9 +2715,9 @@
 			nosmt=force: Force disable SMT, cannot be undone
 				     via the sysfs control file.
 
-	nospectre_v1	[PPC] Disable mitigations for Spectre Variant 1 (bounds
-			check bypass). With this option data leaks are possible
-			in the system.
+	nospectre_v1	[X66, PPC] Disable mitigations for Spectre Variant 1
+			(bounds check bypass). With this option data leaks
+			are possible in the system.
 
 	nospectre_v2	[X86,PPC_FSL_BOOK3E] Disable all mitigations for the Spectre variant 2
 			(indirect branch prediction) vulnerability. System may
@@ -3740,6 +3766,13 @@
 			Run specified binary instead of /init from the ramdisk,
 			used for early userspace startup. See initrd.
 
+	rdrand=		[X86]
+			force - Override the decision by the kernel to hide the
+				advertisement of RDRAND support (this affects
+				certain AMD processors because of buggy BIOS
+				support, specifically around the suspend/resume
+				path).
+
 	rdt=		[HW,X86,RDT]
 			Turn on/off individual RDT features. List is:
 			cmt, mbmtotal, mbmlocal, l3cat, l3cdp, l2cat, mba.
@@ -3803,17 +3836,6 @@
 		protect_image	Turn on image protection during restoration
 				(that will set all pages holding image data
 				during restoration read-only).
-
-	noswap_randomize
-			Kernel uses random disk offsets to help with wear-levelling
-			of SSD devices, while saving the hibernation snapshot image to
-			disk. Use this parameter to disable this feature for SSD
-			devices in scenarios when, such randomization is addressed at
-			the firmware level and hibenration image is not re-generated
-			frequently.
-			(Useful for improving hibernation resume time as snapshot pages
-			are available in disk serially and can be read in bigger chunks
-			without seeking)
 
 	retain_initrd	[RAM] Keep initrd memory after extraction
 

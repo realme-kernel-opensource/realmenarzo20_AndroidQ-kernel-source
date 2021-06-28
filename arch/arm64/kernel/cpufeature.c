@@ -187,8 +187,8 @@ static const struct arm64_ftr_bits ftr_ctr[] = {
 	ARM64_FTR_BITS(FTR_VISIBLE, FTR_STRICT, FTR_EXACT, 31, 1, 1),		/* RES1 */
 	ARM64_FTR_BITS(FTR_VISIBLE, FTR_STRICT, FTR_LOWER_SAFE, 29, 1, 1),	/* DIC */
 	ARM64_FTR_BITS(FTR_VISIBLE, FTR_STRICT, FTR_LOWER_SAFE, 28, 1, 1),	/* IDC */
-	ARM64_FTR_BITS(FTR_VISIBLE, FTR_STRICT, FTR_HIGHER_SAFE, 24, 4, 0),	/* CWG */
-	ARM64_FTR_BITS(FTR_VISIBLE, FTR_STRICT, FTR_HIGHER_SAFE, 20, 4, 0),	/* ERG */
+	ARM64_FTR_BITS(FTR_VISIBLE, FTR_STRICT, FTR_HIGHER_OR_ZERO_SAFE, 24, 4, 0),	/* CWG */
+	ARM64_FTR_BITS(FTR_VISIBLE, FTR_STRICT, FTR_HIGHER_OR_ZERO_SAFE, 20, 4, 0),	/* ERG */
 	ARM64_FTR_BITS(FTR_VISIBLE, FTR_STRICT, FTR_LOWER_SAFE, CTR_DMINLINE_SHIFT, 4, 1),
 	/*
 	 * Linux can handle differing I-cache policies. Userspace JITs will
@@ -347,7 +347,6 @@ static const struct __ftr_reg_entry {
 	/* Op1 = 0, CRn = 0, CRm = 4 */
 	ARM64_FTR_REG(SYS_ID_AA64PFR0_EL1, ftr_id_aa64pfr0),
 	ARM64_FTR_REG(SYS_ID_AA64PFR1_EL1, ftr_id_aa64pfr1),
-	ARM64_FTR_REG(SYS_ID_AA64ZFR0_EL1, ftr_raz),
 
 	/* Op1 = 0, CRn = 0, CRm = 5 */
 	ARM64_FTR_REG(SYS_ID_AA64DFR0_EL1, ftr_id_aa64dfr0),
@@ -421,6 +420,10 @@ static s64 arm64_ftr_safe_value(const struct arm64_ftr_bits *ftrp, s64 new,
 	case FTR_LOWER_SAFE:
 		ret = new < cur ? new : cur;
 		break;
+	case FTR_HIGHER_OR_ZERO_SAFE:
+		if (!cur || !new)
+			break;
+		/* Fallthrough */
 	case FTR_HIGHER_SAFE:
 		ret = new > cur ? new : cur;
 		break;
@@ -546,7 +549,7 @@ static int check_update_ftr_reg(u32 sys_id, int cpu, u64 val, u64 boot)
 	update_cpu_ftr_reg(regp, val);
 	if ((boot & regp->strict_mask) == (val & regp->strict_mask))
 		return 0;
-	pr_debug("SANITY CHECK: Unexpected variation in %s. Boot CPU: %#016llx, CPU%d: %#016llx\n",
+	pr_warn("SANITY CHECK: Unexpected variation in %s. Boot CPU: %#016llx, CPU%d: %#016llx\n",
 			regp->name, boot, cpu, val);
 	return 1;
 }
@@ -817,6 +820,18 @@ static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
 {
 	char const *str = "command line option";
 	u64 pfr0 = read_sanitised_ftr_reg(SYS_ID_AA64PFR0_EL1);
+	/* List of CPUs that are not vulnerable and don't need KPTI */
+	static const struct midr_range kpti_safe_list[] = {
+		_MIDR_ALL_VERSIONS(MIDR_CAVIUM_THUNDERX2),
+		_MIDR_ALL_VERSIONS(MIDR_BRCM_VULCAN),
+		_MIDR_ALL_VERSIONS(MIDR_CORTEX_A35),
+		_MIDR_ALL_VERSIONS(MIDR_CORTEX_A53),
+		_MIDR_ALL_VERSIONS(MIDR_CORTEX_A55),
+		_MIDR_ALL_VERSIONS(MIDR_CORTEX_A57),
+		_MIDR_ALL_VERSIONS(MIDR_CORTEX_A72),
+		_MIDR_ALL_VERSIONS(MIDR_CORTEX_A73),
+		{ /* sentinel */ }
+	};
 
 	/*
 	 * For reasons that aren't entirely clear, enabling KPTI on Cavium
@@ -840,11 +855,8 @@ static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
 		return true;
 
 	/* Don't force KPTI for CPUs that are not vulnerable */
-	switch (read_cpuid_id() & MIDR_CPU_MODEL_MASK) {
-	case MIDR_CAVIUM_THUNDERX2:
-	case MIDR_BRCM_VULCAN:
+	if (is_midr_in_range_list(read_cpuid_id(), kpti_safe_list))
 		return false;
-	}
 
 	/* Defer to CPU feature registers */
 	return !cpuid_feature_extract_unsigned_field(pfr0,
@@ -889,84 +901,6 @@ static int __init parse_kpti(char *str)
 early_param("kpti", parse_kpti);
 #endif	/* CONFIG_UNMAP_KERNEL_AT_EL0 */
 
-#ifdef CONFIG_ARM64_HW_AFDBM
-static inline void __cpu_enable_hw_dbm(void)
-{
-	u64 tcr = read_sysreg(tcr_el1) | TCR_HD;
-
-	write_sysreg(tcr, tcr_el1);
-	isb();
-}
-
-static bool cpu_has_broken_dbm(void)
-{
-	/* List of CPUs which have broken DBM support. */
-	static const struct midr_range cpus[] = {
-#ifdef CONFIG_ARM64_ERRATUM_1024718
-		// A55 r0p0 -r1p0
-		GENERIC_MIDR_RANGE(MIDR_CORTEX_A55, 0, 0, 1, 0),
-		GENERIC_MIDR_RANGE(MIDR_KRYO3S, 7, 12, 7, 12),
-		GENERIC_MIDR_RANGE(MIDR_KRYO4S, 7, 12, 7, 12),
-#endif
-		{},
-	};
-
-	return is_midr_in_range_list(read_cpuid_id(), cpus);
-}
-
-static bool cpu_can_use_dbm(const struct arm64_cpu_capabilities *cap)
-{
-	bool has_cpu_feature;
-
-	preempt_disable();
-	has_cpu_feature = has_cpuid_feature(cap, SCOPE_LOCAL_CPU);
-	preempt_enable();
-
-	return has_cpu_feature && !cpu_has_broken_dbm();
-}
-
-static int cpu_enable_hw_dbm(void *entry)
-{
-	const struct arm64_cpu_capabilities *cap =
-		(const struct arm64_cpu_capabilities *) entry;
-
-	if (cpu_can_use_dbm(cap))
-		__cpu_enable_hw_dbm();
-
-	return 0;
-}
-
-static bool has_hw_dbm(const struct arm64_cpu_capabilities *cap,
-		       int __unused)
-{
-	static bool detected = false;
-	/*
-	 * DBM is a non-conflicting feature. i.e, the kernel can safely
-	 * run a mix of CPUs with and without the feature. So, we
-	 * unconditionally enable the capability to allow any late CPU
-	 * to use the feature. We only enable the control bits on the
-	 * CPU, if it actually supports.
-	 *
-	 * We have to make sure we print the "feature" detection only
-	 * when at least one CPU actually uses it. So check if this CPU
-	 * can actually use it and print the message exactly once.
-	 *
-	 * This is safe as all CPUs (including secondary CPUs - due to the
-	 * LOCAL_CPU scope - and the hotplugged CPUs - via verification)
-	 * goes through the "matches" check exactly once. Also if a CPU
-	 * matches the criteria, it is guaranteed that the CPU will turn
-	 * the DBM on, as the capability is unconditionally enabled.
-	 */
-	if (!detected && cpu_can_use_dbm(cap)) {
-		detected = true;
-		pr_info("detected: Hardware dirty bit management\n");
-	}
-
-	return true;
-}
-
-#endif
-
 static int cpu_copy_el2regs(void *__unused)
 {
 	/*
@@ -982,29 +916,28 @@ static int cpu_copy_el2regs(void *__unused)
 
 	return 0;
 }
-
 #ifdef CONFIG_ARM64_SSBD
 static int ssbs_emulation_handler(struct pt_regs *regs, u32 instr)
 {
 	if (user_mode(regs))
 		return 1;
 
-	if (instr & BIT(PSTATE_Imm_shift))
+	if (instr & BIT(CRm_shift))
 		regs->pstate |= PSR_SSBS_BIT;
 	else
 		regs->pstate &= ~PSR_SSBS_BIT;
 
-	regs->pc += 4;
+	arm64_skip_faulting_instruction(regs, 4);
 	return 0;
 }
 
 static struct undef_hook ssbs_emulation_hook = {
-	.instr_mask	= ~(1U << PSTATE_Imm_shift),
-	.instr_val	= 0xd500401f | PSTATE_SSBS,
+	.instr_mask	= ~(1U << CRm_shift),
+	.instr_val	= 0xd500001f | REG_PSTATE_SSBS_IMM,
 	.fn		= ssbs_emulation_handler,
 };
 
-static int cpu_enable_ssbs(void *__unsused)
+static int cpu_enable_ssbs(void *__unused)
 {
 	static bool undef_hook_registered = false;
 	static DEFINE_SPINLOCK(hook_lock);
@@ -1017,8 +950,7 @@ static int cpu_enable_ssbs(void *__unsused)
 	spin_unlock(&hook_lock);
 
 	if (arm64_get_ssbd_state() == ARM64_SSBD_FORCE_DISABLE) {
-		write_sysreg((read_sysreg(sctlr_el1) | SCTLR_ELx_DSSBS),
-				sctlr_el1);
+		sysreg_clear_set(sctlr_el1, 0, SCTLR_ELx_DSSBS);
 		arm64_set_ssbd_mitigation(false);
 	} else {
 		arm64_set_ssbd_mitigation(true);
@@ -1141,29 +1073,13 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.min_field_value = 1,
 	},
 #endif
-#ifdef CONFIG_ARM64_HW_AFDBM
-	{
-		/*
-		 * Since we turn this on always, we don't want the user to
-		 * think that the feature is available when it may not be.
-		 * So hide the description.
-		 *
-		 * .desc = "Hardware pagetable Dirty Bit Management",
-		 *
-		 */
-		.capability = ARM64_HW_DBM,
-		.sys_reg = SYS_ID_AA64MMFR1_EL1,
-		.sign = FTR_UNSIGNED,
-		.field_pos = ID_AA64MMFR1_HADBS_SHIFT,
-		.min_field_value = 2,
-		.matches = has_hw_dbm,
-		.enable = cpu_enable_hw_dbm,
-	},
-#endif
+#ifndef CONFIG_MTK_IGNORE_SSBS
 #ifdef CONFIG_ARM64_SSBD
 	{
 		.desc = "Speculative Store Bypassing Safe (SSBS)",
 		.capability = ARM64_SSBS,
+		.def_scope = SCOPE_LOCAL_CPU,
+		//.type = ARM64_CPUCAP_WEAK_LOCAL_CPU_FEATURE,
 		.matches = has_cpuid_feature,
 		.sys_reg = SYS_ID_AA64PFR1_EL1,
 		.field_pos = ID_AA64PFR1_SSBS_SHIFT,
@@ -1171,6 +1087,7 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.min_field_value = ID_AA64PFR1_SSBS_PSTATE_ONLY,
 		.enable = cpu_enable_ssbs,
 	},
+#endif
 #endif
 	{},
 };

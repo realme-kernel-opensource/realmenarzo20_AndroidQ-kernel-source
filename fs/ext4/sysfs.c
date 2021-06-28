@@ -160,7 +160,6 @@ static struct ext4_attr ext4_attr_##_name = {			\
 #define EXT4_RW_ATTR_DCC_UI(_name,_elname)	\
 	EXT4_ATTR_OFFSET(_name, 0644, pointer_ui, discard_cmd_control, _elname)
 #endif
-
 #define EXT4_ATTR_PTR(_name,_mode,_id,_ptr) \
 static struct ext4_attr ext4_attr_##_name = {			\
 	.attr = {.name = __stringify(_name), .mode = _mode },	\
@@ -272,6 +271,7 @@ static struct attribute *ext4_feat_attrs[] = {
 	NULL,
 };
 
+extern unsigned int sysctl_ext4_async_discard_enable;
 static void *calc_ptr(struct ext4_attr *a, struct ext4_sb_info *sbi)
 {
 	switch (a->attr_ptr) {
@@ -284,11 +284,11 @@ static void *calc_ptr(struct ext4_attr *a, struct ext4_sb_info *sbi)
 #if defined(VENDOR_EDIT) && defined(CONFIG_EXT4_ASYNC_DISCARD_SUPPORT)
 //yh@PSW.BSP.Storage.EXT4, 2019-01-08 add for ext4 async discard suppot
 	case ptr_discard_cmd_control_offset:
-		if (!test_opt(sbi->s_buddy_cache->i_sb, ASYNC_DISCARD)){
+        if (!sysctl_ext4_async_discard_enable){
             return 0;    
         }
-       
-        return (void *) (((char *) sbi->dcc_info) + a->u.offset);
+        
+		return (void *) (((char *) sbi->dcc_info) + a->u.offset);
 #endif
 	}
 	return NULL;

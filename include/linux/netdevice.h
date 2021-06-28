@@ -2140,10 +2140,13 @@ struct napi_gro_cb {
 	/* Used in GRE, set in fou/gue_gro_receive */
 	u8	is_fou:1;
 
+	/* Used to determine if flush_id can be ignored */
+	u8	is_atomic:1;
+
 	/* Number of gro_receive callbacks this packet already went through */
 	u8 recursion_counter:4;
 
-	/* 2 bit hole */
+	/* 1 bit hole */
 
 	/* used to support CHECKSUM_COMPLETE for tunneling protocols */
 	__wsum	csum;
@@ -2768,15 +2771,12 @@ extern int netdev_flow_limit_table_len;
  */
 struct softnet_data {
 	struct list_head	poll_list;
-	struct napi_struct	*current_napi;
 	struct sk_buff_head	process_queue;
 
 	/* stats */
 	unsigned int		processed;
 	unsigned int		time_squeeze;
 	unsigned int		received_rps;
-	unsigned int            gro_coalesced;
-
 #ifdef CONFIG_RPS
 	struct softnet_data	*rps_ipi_list;
 #endif
@@ -3282,7 +3282,6 @@ struct sk_buff *napi_get_frags(struct napi_struct *napi);
 gro_result_t napi_gro_frags(struct napi_struct *napi);
 struct packet_offload *gro_find_receive_by_type(__be16 type);
 struct packet_offload *gro_find_complete_by_type(__be16 type);
-extern struct napi_struct *get_current_napi_context(void);
 
 static inline void napi_free_frags(struct napi_struct *napi)
 {
@@ -3354,6 +3353,31 @@ extern unsigned int	netdev_budget_usecs;
 /* Called by rtnetlink.c:rtnl_unlock() */
 void netdev_run_todo(void);
 
+#define REFCNT_DEBUG 1
+#define REFCNT_MEMORY_DEBUG 1
+#if defined (REFCNT_DEBUG) && defined (REFCNT_MEMORY_DEBUG)
+#include <linux/stacktrace.h>
+
+#define MAX_TRACE_DEPTH 10
+#define MAX_TRACE_LEN  4096
+#define TRACE_SKIP_DEPTH 0
+#define DEV_PUT_FLAG   (1 << 28)
+#define DEV_HOLD_FLAG  (2 << 28)
+
+struct refcnt_trace {
+    int refcnt;
+    unsigned int info;
+    unsigned int entry_nr;
+    unsigned long time;
+    unsigned long entry[MAX_TRACE_DEPTH];
+};
+
+extern struct refcnt_trace trace_array[MAX_TRACE_LEN];
+extern unsigned int trace_idx;
+
+#endif
+
+
 /**
  *	dev_put - release reference to device
  *	@dev: network device
@@ -3362,7 +3386,41 @@ void netdev_run_todo(void);
  */
 static inline void dev_put(struct net_device *dev)
 {
-	this_cpu_dec(*dev->pcpu_refcnt);
+    #if defined (REFCNT_DEBUG) && defined (REFCNT_MEMORY_DEBUG)
+    struct stack_trace trace;
+    unsigned int cpu, idx;
+    #endif
+    this_cpu_dec(*dev->pcpu_refcnt);
+    #ifdef REFCNT_DEBUG
+    if (!strncmp(dev->name, "wlan0", 5)) {
+        #ifdef REFCNT_MEMORY_DEBUG
+        cpu = get_cpu();
+        idx = trace_idx;
+        if (++trace_idx >= MAX_TRACE_LEN)
+            trace_idx = 0;
+        put_cpu();
+        trace_array[idx].time = sched_clock();
+        trace_array[idx].refcnt = this_cpu_read(*dev->pcpu_refcnt);
+        trace_array[idx].info = DEV_PUT_FLAG |
+                                current->pid | (cpu << 24);
+ 
+        trace.nr_entries = 0;
+        trace.max_entries = MAX_TRACE_DEPTH;
+        trace.entries = trace_array[idx].entry;
+        trace.skip = TRACE_SKIP_DEPTH;
+        save_stack_trace(&trace);
+        trace_array[idx].entry_nr = trace.nr_entries;
+#ifndef ODM_WT_EDIT
+/*Mingkai.Yu@ODM_WT.WCN.wifi 2020/08/24, log optimization*/
+        pr_info("[mtk_net] dev_put:%s, cpu%d_refcnt=%d, idx=%d(%d), time=%ld\n",
+            dev->name, cpu, trace_array[idx].refcnt,
+            idx, trace_idx, trace_array[idx].time);
+#endif
+        #else
+        dump_stack();
+        #endif
+    }
+    #endif
 }
 
 /**
@@ -3373,7 +3431,43 @@ static inline void dev_put(struct net_device *dev)
  */
 static inline void dev_hold(struct net_device *dev)
 {
-	this_cpu_inc(*dev->pcpu_refcnt);
+    #if defined (REFCNT_DEBUG) && defined (REFCNT_MEMORY_DEBUG)
+    struct stack_trace trace;
+    unsigned int cpu, idx;
+    #endif
+
+    this_cpu_inc(*dev->pcpu_refcnt);
+
+    #ifdef REFCNT_DEBUG
+    if (!strncmp(dev->name, "wlan0", 5)) {
+        #ifdef REFCNT_MEMORY_DEBUG
+        cpu = get_cpu();
+        idx = trace_idx;
+        if (++trace_idx >= MAX_TRACE_LEN)
+            trace_idx = 0;
+        put_cpu();
+        trace_array[idx].time = sched_clock();
+        trace_array[idx].refcnt = this_cpu_read(*dev->pcpu_refcnt);
+        trace_array[idx].info = DEV_HOLD_FLAG |
+                                current->pid | (cpu << 24);
+
+        trace.nr_entries = 0;
+        trace.max_entries = MAX_TRACE_DEPTH;
+        trace.entries = trace_array[idx].entry;
+        trace.skip = TRACE_SKIP_DEPTH;
+        save_stack_trace(&trace);
+        trace_array[idx].entry_nr = trace.nr_entries;
+#ifndef ODM_WT_EDIT
+/*Mingkai.Yu@ODM_WT.WCN.wifi 2020/08/24, log optimization*/
+        pr_info("[mtk_net] dev_hold:%s, cpu%d_refcnt=%d, idx=%d(%d), time=%ld\n",
+            dev->name, cpu, trace_array[idx].refcnt,
+            idx, trace_idx, trace_array[idx].time);
+#endif
+        #else
+        dump_stack();
+        #endif
+    }
+    #endif
 }
 
 /* Carrier loss detection, dial on demand. The functions netif_carrier_on
@@ -4133,7 +4227,6 @@ static inline bool net_gso_ok(netdev_features_t features, int gso_type)
 	BUILD_BUG_ON(SKB_GSO_SCTP    != (NETIF_F_GSO_SCTP >> NETIF_F_GSO_SHIFT));
 	BUILD_BUG_ON(SKB_GSO_ESP != (NETIF_F_GSO_ESP >> NETIF_F_GSO_SHIFT));
 	BUILD_BUG_ON(SKB_GSO_UDP != (NETIF_F_GSO_UDP >> NETIF_F_GSO_SHIFT));
-	BUILD_BUG_ON(SKB_GSO_UDP_L4 != (NETIF_F_GSO_UDP_L4 >> NETIF_F_GSO_SHIFT));
 
 	return (features & feature) == feature;
 }

@@ -29,6 +29,8 @@
 #include <asm/cputype.h>
 #include <asm/topology.h>
 
+#include "topology_dts.c"
+
 static int __init get_cpu_for_node(struct device_node *node)
 {
 	struct device_node *cpu_node;
@@ -38,14 +40,18 @@ static int __init get_cpu_for_node(struct device_node *node)
 	if (!cpu_node)
 		return -1;
 
-	cpu = of_cpu_node_to_id(cpu_node);
-	if (cpu >= 0)
-		topology_parse_cpu_capacity(cpu_node, cpu);
-	else
-		pr_crit("Unable to find CPU node for %pKOF\n", cpu_node);
+	for_each_possible_cpu(cpu) {
+		if (of_get_cpu_node(cpu, NULL) == cpu_node) {
+			topology_parse_cpu_capacity(cpu_node, cpu);
+			of_node_put(cpu_node);
+			return cpu;
+		}
+	}
+
+	pr_crit("Unable to find CPU node for %pOF\n", cpu_node);
 
 	of_node_put(cpu_node);
-	return cpu;
+	return -1;
 }
 
 static int __init parse_core(struct device_node *core, int cluster_id,
@@ -299,19 +305,21 @@ static int cpu_flags(void)
 	return topology_cpu_flags();
 }
 
-static inline
+#ifndef CONFIG_MTK_UNIFY_POWER
+inline
 const struct sched_group_energy * const cpu_core_energy(int cpu)
 {
 	return sge_array[cpu][SD_LEVEL0];
 }
 
-static inline
+inline
 const struct sched_group_energy * const cpu_cluster_energy(int cpu)
 {
 	return sge_array[cpu][SD_LEVEL1];
 }
+#endif
 
-static inline
+inline
 const struct sched_group_energy * const cpu_system_energy(int cpu)
 {
 	return sge_array[cpu][SD_LEVEL2];
@@ -325,7 +333,7 @@ static struct sched_domain_topology_level arm64_topology[] = {
 	{ cpu_coregroup_mask, core_flags, cpu_core_energy, SD_INIT_NAME(MC) },
 #endif
 	{ cpu_cpu_mask, cpu_flags, cpu_cluster_energy, SD_INIT_NAME(DIE) },
-	{ cpu_cpu_mask, NULL, cpu_system_energy, SD_INIT_NAME(SYS) },
+//	{ cpu_cpu_mask, NULL, cpu_system_energy, SD_INIT_NAME(SYS) },
 	{ NULL, }
 };
 
@@ -349,19 +357,14 @@ static void __init reset_cpu_topology(void)
 
 void __init init_cpu_topology(void)
 {
-	int cpu;
-
 	reset_cpu_topology();
 
 	/*
 	 * Discard anything that was parsed if we hit an error so we
 	 * don't use partial information.
 	 */
-	if (of_have_populated_dt() && parse_dt_topology()) {
+	if (of_have_populated_dt() && parse_dt_topology())
 		reset_cpu_topology();
-	} else {
+	else
 		set_sched_topology(arm64_topology);
-		for_each_possible_cpu(cpu)
-			update_siblings_masks(cpu);
-	}
 }

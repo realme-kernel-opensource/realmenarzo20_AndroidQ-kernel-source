@@ -143,7 +143,7 @@ static int file_write(struct file_buffer *file, bool new_open)
         return -1;
     }
 
-    if (file->file_name[0] == 0) {
+    if (file->file_name == NULL) {
         ipio_err("file name is invaild\n");
         return -1;
     }
@@ -202,36 +202,22 @@ static int debug_mode_get_data(struct file_buffer *file, u8 type, u32 frame_coun
             mutex_lock(&idev->touch_mutex);
             file->file_len = 0;
             memset(file->ptr, 0, file->file_max_zise);
-            file->file_len += snprintf(file->ptr + file->file_len,
-                                       file->file_max_zise - file->file_len,
-                                       "\n\nFrame%d,", write_index);
+            file->file_len += sprintf(file->ptr + file->file_len, "\n\nFrame%d,", write_index);
             for (j = 0; j < col; j++)
-                file->file_len += snprintf(file->ptr + file->file_len,
-                                           file->file_max_zise - file->file_len,
-                                           "[X%d] ,", j);
+                file->file_len += sprintf(file->ptr + file->file_len, "[X%d] ,", j);
             ptr = &idev->debug_buf[write_index % 1024][35];
             for (j = 0; j < row * col; j++, ptr += 2) {
                 temp = (*ptr << 8) + *(ptr + 1);
                 if (j % col == 0)
-                    file->file_len += snprintf(file->ptr + file->file_len,
-                                               file->file_max_zise - file->file_len,
-                                               "\n[Y%d] ,", (j / col));
-                file->file_len += snprintf(file->ptr + file->file_len,
-                                           file->file_max_zise - file->file_len,
-                                           "%d, ", temp);
+                    file->file_len += sprintf(file->ptr + file->file_len, "\n[Y%d] ,", (j / col));
+                file->file_len += sprintf(file->ptr + file->file_len, "%d, ", temp);
             }
-            file->file_len += snprintf(file->ptr + file->file_len,
-                                       file->file_max_zise - file->file_len,
-                                       "\n[X] ,");
+            file->file_len += sprintf(file->ptr + file->file_len, "\n[X] ,");
             for (j = 0; j < row + col; j++, ptr += 2) {
                 temp = (*ptr << 8) + *(ptr + 1);
                 if (j == col)
-                    file->file_len += snprintf(file->ptr + file->file_len,
-                                               file->file_max_zise - file->file_len,
-                                               "\n[Y] ,");
-                file->file_len += snprintf(file->ptr + file->file_len,
-                                           file->file_max_zise - file->file_len,
-                                           "%d, ", temp);
+                    file->file_len += sprintf(file->ptr + file->file_len, "\n[Y] ,");
+                file->file_len += sprintf(file->ptr + file->file_len, "%d, ", temp);
             }
             file_write(file, false);
             write_index++;
@@ -439,7 +425,7 @@ out:
 
 static ssize_t ilitek_proc_fw_pc_counter_read(struct file *pFile, char __user *buf, size_t size, loff_t *pos)
 {
-    int pc;
+    u32 pc;
 
     if (*pos != 0)
         return 0;
@@ -520,12 +506,14 @@ out:
 
 static ssize_t ilitek_proc_rw_tp_reg_write(struct file *filp, const char *buff, size_t size, loff_t *pos)
 {
+    int ret = 0;
     char *token = NULL, *cur = NULL;
     char cmd[256] = { 0 };
     u32 count = 0;
 
     if (buff != NULL) {
-        if (copy_from_user(cmd, buff, size - 1)) {
+        ret = copy_from_user(cmd, buff, size - 1);
+        if (ret < 0) {
             TPD_INFO("copy data from user space, failed\n");
             return -1;
         }
@@ -577,9 +565,7 @@ static ssize_t ilitek_proc_debug_switch_read(struct file *pFile, char __user *bu
     }
     TPD_INFO(" %s debug_flag message = %x\n", idev->debug_node_open ? "Enabled" : "Disabled", idev->debug_node_open);
 
-    size = snprintf(g_user_buf, USER_STR_BUFF,
-                    "debug_node_open : %s\n",
-                    idev->debug_node_open ? "Enabled" : "Disabled");
+    size = sprintf(g_user_buf, "debug_node_open : %s\n", idev->debug_node_open ? "Enabled" : "Disabled");
 
     *pos += size;
 
@@ -616,12 +602,10 @@ static ssize_t ilitek_proc_debug_message_read(struct file *filp, char __user *bu
 
     mutex_lock(&idev->debug_mutex);
 
-    tmpbuf = vmalloc(DEBUG_MESSAGE_MAX_LENGTH);    /* buf size if even */
+    tmpbuf = vmalloc(DEBUG_DATA_MAX_LENGTH * 2);    /* buf size if even */
     if (ERR_ALLOC_MEM(tmpbuf)) {
         ipio_err("buffer vmalloc error\n");
-        send_data_len += snprintf(tmpbufback + send_data_len,
-                                  128 - send_data_len,
-                                  "buffer vmalloc error\n");
+        send_data_len += sprintf(tmpbufback + send_data_len, "buffer vmalloc error\n");
         ret = copy_to_user(buff, tmpbufback, send_data_len); /*idev->debug_buf[0] */
         goto out;
     }
@@ -648,17 +632,14 @@ static ssize_t ilitek_proc_debug_message_read(struct file *filp, char __user *bu
         }
 
         for (i = 0; i < need_read_data_len; i++) {
-            send_data_len += snprintf(tmpbuf + send_data_len,
-                                      DEBUG_MESSAGE_MAX_LENGTH - send_data_len,
-                                      "%02X", idev->debug_buf[0][i]);
+            send_data_len += sprintf(tmpbuf + send_data_len, "%02X", idev->debug_buf[0][i]);
             if (send_data_len >= (DEBUG_DATA_MAX_LENGTH * 2)) {
                 ipio_err("send_data_len = %d set 4096 i = %d\n", send_data_len, i);
                 send_data_len = (DEBUG_DATA_MAX_LENGTH * 2);
                 break;
             }
         }
-        send_data_len += snprintf(tmpbuf + send_data_len,
-                                  DEBUG_MESSAGE_MAX_LENGTH - send_data_len, "\n\n");
+        send_data_len += sprintf(tmpbuf + send_data_len, "\n\n");
 
         if (p == 5 || size == (DEBUG_DATA_MAX_LENGTH * 2) || size == DEBUG_DATA_MAX_LENGTH) {
             idev->debug_data_frame--;
@@ -671,8 +652,7 @@ static ssize_t ilitek_proc_debug_message_read(struct file *filp, char __user *bu
         }
     } else {
         ipio_err("no data send\n");
-        send_data_len += snprintf(tmpbuf + send_data_len,
-                                  DEBUG_MESSAGE_MAX_LENGTH - send_data_len, "no data send\n");
+        send_data_len += sprintf(tmpbuf + send_data_len, "no data send\n");
     }
 
     /* Preparing to send debug data to user */
@@ -714,10 +694,10 @@ static ssize_t ilitek_proc_get_debug_mode_data_read(struct file *filp, char __us
 
     /* initialize file */
     memset(csv.file_name, 0, sizeof(csv.file_name));
-    snprintf(csv.file_name, 128, "%s", DEBUG_DATA_FILE_PATH);
+    sprintf(csv.file_name, "%s", DEBUG_DATA_FILE_PATH);
     csv.file_len = 0;
     csv.file_max_zise = DEBUG_DATA_FILE_SIZE;
-    csv.ptr = vmalloc(DEBUG_DATA_FILE_SIZE);
+    csv.ptr = vmalloc(csv.file_max_zise);
 
     if (ERR_ALLOC_MEM(csv.ptr)) {
         ipio_err("Failed to allocate CSV mem\n");
@@ -727,12 +707,8 @@ static ssize_t ilitek_proc_get_debug_mode_data_read(struct file *filp, char __us
     /* save data to csv */
     TPD_INFO("Get Raw data %d frame\n", idev->raw_count);
     TPD_INFO("Get Delta data %d frame\n", idev->delta_count);
-    csv.file_len += snprintf(csv.ptr + csv.file_len,
-                             DEBUG_DATA_FILE_SIZE - csv.file_len,
-                             "Get Raw data %d frame\n", idev->raw_count);
-    csv.file_len += snprintf(csv.ptr + csv.file_len,
-                             DEBUG_DATA_FILE_SIZE - csv.file_len,
-                             "Get Delta data %d frame\n", idev->delta_count);
+    csv.file_len += sprintf(csv.ptr + csv.file_len, "Get Raw data %d frame\n", idev->raw_count);
+    csv.file_len += sprintf(csv.ptr + csv.file_len, "Get Delta data %d frame\n", idev->delta_count);
     file_write(&csv, true);
 
     /* change to debug mode */
@@ -746,9 +722,7 @@ static ssize_t ilitek_proc_get_debug_mode_data_read(struct file *filp, char __us
     /* get raw data */
     csv.file_len = 0;
     memset(csv.ptr, 0, csv.file_max_zise);
-    csv.file_len += snprintf(csv.ptr + csv.file_len,
-                             DEBUG_DATA_FILE_SIZE - csv.file_len,
-                             "\n\n=======Raw data=======");
+    csv.file_len += sprintf(csv.ptr + csv.file_len, "\n\n=======Raw data=======");
     file_write(&csv, false);
     ret = debug_mode_get_data(&csv, P5_X_FW_RAW_DATA_MODE, idev->raw_count);
     if (ret < 0)
@@ -757,9 +731,7 @@ static ssize_t ilitek_proc_get_debug_mode_data_read(struct file *filp, char __us
     /* get delta data */
     csv.file_len = 0;
     memset(csv.ptr, 0, csv.file_max_zise);
-    csv.file_len += snprintf(csv.ptr + csv.file_len,
-                             DEBUG_DATA_FILE_SIZE - csv.file_len,
-                             "\n\n=======Delta data=======");
+    csv.file_len += sprintf(csv.ptr + csv.file_len, "\n\n=======Delta data=======");
     file_write(&csv, false);
     ret = debug_mode_get_data(&csv, P5_X_FW_DELTA_DATA_MODE, idev->delta_count);
     if (ret < 0)
@@ -777,12 +749,14 @@ out:
 
 static ssize_t ilitek_proc_get_debug_mode_data_write(struct file *filp, const char *buff, size_t size, loff_t *pos)
 {
+    int ret = 0;
     char *token = NULL, *cur = NULL;
     char cmd[256] = {0};
     u8 temp[256] = {0}, count = 0;
 
     if (buff != NULL) {
-        if (copy_from_user(cmd, buff, size - 1)) {
+        ret = copy_from_user(cmd, buff, size - 1);
+        if (ret < 0) {
             TPD_INFO("copy data from user space, failed\n");
             return -1;
         }
@@ -852,7 +826,7 @@ static ssize_t ilitek_proc_fw_process_read(struct file *filp, char __user *buff,
 
     memset(g_user_buf, 0, USER_STR_BUFF * sizeof(unsigned char));
 
-    len = snprintf(g_user_buf, USER_STR_BUFF, "%02d\n", idev->fw_update_stat);
+    len = sprintf(g_user_buf, "%02d\n", idev->fw_update_stat);
 
     TPD_INFO("update status = %d\n", idev->fw_update_stat);
 
@@ -863,56 +837,6 @@ static ssize_t ilitek_proc_fw_process_read(struct file *filp, char __user *buff,
 
     *pos = len;
     return len;
-}
-
-static int ilitek_tdd_fw_hex_open(void)
-{
-    int fsize = 1;
-    struct file *f = NULL;
-    mm_segment_t old_fs;
-    loff_t pos = 0;
-
-    TPD_INFO("Open file method = FILP_OPEN, path = %s\n", UPDATE_FW_PATH);
-
-    f = filp_open(UPDATE_FW_PATH, O_RDONLY, 0644);
-    if (ERR_ALLOC_MEM(f)) {
-        ipio_err("Failed to open the file at %ld.\n", PTR_ERR(f));
-        return -ENOMEM;
-    }
-
-    fsize = f->f_inode->i_size;
-    TPD_INFO("fsize = %d\n", fsize);
-    if (fsize <= 0) {
-        ipio_err("The size of file is invaild\n");
-        filp_close(f, NULL);
-        return -ENOMEM;
-    }
-
-    ipio_vfree((void **) & (idev->tp_firmware.data));
-    idev->tp_firmware.size = 0;
-    //new fw data buffer
-    idev->tp_firmware.data = vmalloc(fsize);
-    if (idev->tp_firmware.data == NULL) {
-        TPD_INFO("kmalloc tp firmware data error\n");
-
-        idev->tp_firmware.data = vmalloc(fsize);
-        if (idev->tp_firmware.data == NULL) {
-            TPD_INFO("retry kmalloc tp firmware data error\n");
-            return -ENOMEM;
-        }
-    }
-
-    /* ready to map user's memory to obtain data by reading files */
-    old_fs = get_fs();
-    //set_fs(get_ds());
-    set_fs(KERNEL_DS);
-    pos = 0;
-    vfs_read(f, (u8 *)idev->tp_firmware.data, fsize, &pos);
-    set_fs(old_fs);
-    filp_close(f, NULL);
-    idev->tp_firmware.size = fsize;
-
-    return 0;
 }
 
 static ssize_t ilitek_node_fw_upgrade_read(struct file *filp, char __user *buff, size_t size, loff_t *pos)
@@ -928,15 +852,9 @@ static ssize_t ilitek_node_fw_upgrade_read(struct file *filp, char __user *buff,
     memset(g_user_buf, 0, USER_STR_BUFF * sizeof(unsigned char));
     mutex_lock(&idev->touch_mutex);
     idev->actual_tp_mode = P5_X_FW_DEMO_MODE;
-
-    if (ilitek_tdd_fw_hex_open() < 0) {
-        ipio_err("Failed to open hex file\n");
-    }
-
-    ret = ilitek_tddi_fw_upgrade();
+    ret = ilitek_tddi_fw_upgrade(idev->fw_upgrade_mode, HEX_FILE, idev->fw_open);
     mutex_unlock(&idev->touch_mutex);
-    len = snprintf(g_user_buf, USER_STR_BUFF,
-                   "upgrade firwmare %s\n", (ret != 0) ? "failed" : "succeed");
+    len = sprintf(g_user_buf, "upgrade firwmare %s\n", (ret != 0) ? "failed" : "succeed");
 
     ret = copy_to_user((u32 *) buff, g_user_buf, len);
     if (ret < 0)
@@ -970,10 +888,12 @@ static ssize_t ilitek_proc_debug_level_read(struct file *filp, char __user *buff
 
 static ssize_t ilitek_proc_debug_level_write(struct file *filp, const char *buff, size_t size, loff_t *pPos)
 {
+    int ret = 0;
     char cmd[10] = { 0 };
 
     if (buff != NULL) {
-        if (copy_from_user(cmd, buff, size - 1)) {
+        ret = copy_from_user(cmd, buff, size - 1);
+        if (ret < 0) {
             TPD_INFO("copy data from user space, failed\n");
             return -1;
         }
@@ -985,7 +905,7 @@ static ssize_t ilitek_proc_debug_level_write(struct file *filp, const char *buff
 
 static ssize_t ilitek_node_ioctl_write(struct file *filp, const char *buff, size_t size, loff_t *pos)
 {
-    int i, count = 0;
+    int i, ret = 0, count = 0;
     char cmd[512] = {0};
     char *token = NULL, *cur = NULL;
     u8 temp[256] = {0};
@@ -993,7 +913,8 @@ static ssize_t ilitek_node_ioctl_write(struct file *filp, const char *buff, size
     u8 tp_mode;
 
     if (buff != NULL) {
-        if (copy_from_user(cmd, buff, size - 1)) {
+        ret = copy_from_user(cmd, buff, size - 1);
+        if (ret < 0) {
             TPD_INFO("copy data from user space, failed\n");
             return -1;
         }
@@ -1086,7 +1007,7 @@ static ssize_t ilitek_node_ioctl_write(struct file *filp, const char *buff, size
         else
             idev->gesture_demo_en = ENABLE;
         TPD_INFO("Gesture demo mode control = %d\n",  idev->gesture_demo_en);
-        ilitek_tddi_ic_func_ctrl("gesture_demo_en", idev->gesture_demo_en);
+        ret = ilitek_tddi_ic_func_ctrl("gesture_demo_en", idev->gesture_demo_en);
     } else if (strcmp(cmd, "gesturefailrsn") == 0) {
         if (data[1] == 0)
             ilitek_set_gesture_fail_reason(DISABLE);
@@ -1152,50 +1073,6 @@ static ssize_t ilitek_node_ioctl_write(struct file *filp, const char *buff, size
     return size;
 }
 
-static void ilitek_plat_irq_enable(void)
-{
-    unsigned long flag;
-
-    spin_lock_irqsave(&idev->irq_spin, flag);
-
-    if (atomic_read(&idev->irq_stat) == ENABLE)
-        goto out;
-
-    if (!idev->irq_num) {
-        ipio_err("gpio_to_irq (%d) is incorrect\n", idev->irq_num);
-        goto out;
-    }
-
-    enable_irq(idev->irq_num);
-    atomic_set(&idev->irq_stat, ENABLE);
-    TPD_DEBUG("Enable irq success\n");
-
-out:
-    spin_unlock_irqrestore(&idev->irq_spin, flag);
-}
-
-static void ilitek_plat_irq_disable(void)
-{
-    unsigned long flag;
-
-    spin_lock_irqsave(&idev->irq_spin, flag);
-
-    if (atomic_read(&idev->irq_stat) == DISABLE)
-        goto out;
-
-    if (!idev->irq_num) {
-        ipio_err("gpio_to_irq (%d) is incorrect\n", idev->irq_num);
-        goto out;
-    }
-
-    disable_irq_nosync(idev->irq_num);
-    atomic_set(&idev->irq_stat, DISABLE);
-    TPD_DEBUG("Disable irq success\n");
-
-out:
-    spin_unlock_irqrestore(&idev->irq_spin, flag);
-}
-
 static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     int ret = 0, length = 0;
@@ -1223,9 +1100,9 @@ static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long
     switch (cmd) {
     case ILITEK_IOCTL_I2C_WRITE_DATA:
         TPD_INFO("ioctl: write len = %d\n", i2c_rw_length);
-        if (copy_from_user(szBuf, (u8 *) arg, i2c_rw_length)) {
+        ret = copy_from_user(szBuf, (u8 *) arg, i2c_rw_length);
+        if (ret < 0) {
             ipio_err("Failed to copy data from user space\n");
-            ret = ENOMEM;
             break;
         }
         ret = idev->write(&szBuf[0], i2c_rw_length);
@@ -1249,15 +1126,15 @@ static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long
         break;
     case ILITEK_IOCTL_TP_HW_RESET:
         TPD_INFO("ioctl: hw reset\n");
-        ilitek_tddi_reset_ctrl(ILITEK_RESET_METHOD);
+        ilitek_tddi_reset_ctrl(idev->reset);
         break;
     case ILITEK_IOCTL_TP_POWER_SWITCH:
         TPD_INFO("Not implemented yet\n");
         break;
     case ILITEK_IOCTL_TP_REPORT_SWITCH:
-        if (copy_from_user(szBuf, (u8 *) arg, 1)) {
+        ret = copy_from_user(szBuf, (u8 *) arg, 1);
+        if (ret < 0) {
             ipio_err("Failed to copy data from user space\n");
-            ret = ENOMEM;
             break;
         }
         TPD_INFO("ioctl: report switch = %d\n", szBuf[0]);
@@ -1270,9 +1147,9 @@ static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long
         }
         break;
     case ILITEK_IOCTL_TP_IRQ_SWITCH:
-        if (copy_from_user(szBuf, (u8 *) arg, 1)) {
+        ret = copy_from_user(szBuf, (u8 *) arg, 1);
+        if (ret < 0) {
             ipio_err("Failed to copy data from user space\n");
-            ret = ENOMEM;
             break;
         }
         TPD_INFO("ioctl: irq switch = %d\n", szBuf[0]);
@@ -1282,20 +1159,18 @@ static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long
             ilitek_plat_irq_disable();
         break;
     case ILITEK_IOCTL_TP_DEBUG_LEVEL:
-
-        if (copy_from_user(dbg, (u32 *) arg, sizeof(u32))) {
+        ret = copy_from_user(dbg, (u32 *) arg, sizeof(u32));
+        if (ret < 0) {
             ipio_err("Failed to copy data from user space\n");
-            ret = ENOMEM;
             break;
         }
         ipio_debug_level = katoi(dbg);
         TPD_INFO("ipio_debug_level = %d", ipio_debug_level);
         break;
     case ILITEK_IOCTL_TP_FUNC_MODE:
-
-        if (copy_from_user(szBuf, (u8 *) arg, 3)) {
+        ret = copy_from_user(szBuf, (u8 *) arg, 3);
+        if (ret < 0) {
             ipio_err("Failed to copy data from user space\n");
-            ret = ENOMEM;
             break;
         }
         TPD_INFO("ioctl: set func mode = %x,%x,%x\n", szBuf[0], szBuf[1], szBuf[2]);
@@ -1350,7 +1225,7 @@ static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long
         break;
     case ILITEK_IOCTL_TP_DRV_VER:
         TPD_INFO("ioctl: get driver version\n");
-        length = snprintf(szBuf, IOCTL_I2C_BUFF, "%s", DRIVER_VERSION);
+        length = sprintf(szBuf, "%s", DRIVER_VERSION);
         ret = copy_to_user((u8 *) arg, szBuf, length);
         if (ret < 0) {
             ipio_err("Failed to copy driver ver to user space\n");
@@ -1373,9 +1248,9 @@ static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long
         ilitek_ice_mode_ctrl(DISABLE, OFF);
         break;
     case ILITEK_IOCTL_TP_NETLINK_CTRL:
-        if (copy_from_user(szBuf, (u8 *) arg, 1)) {
+        ret = copy_from_user(szBuf, (u8 *) arg, 1);
+        if (ret < 0) {
             ipio_err("Failed to copy data from user space\n");
-            ret = ENOMEM;
             break;
         }
         TPD_INFO("ioctl: netlink ctrl = %d\n", szBuf[0]);
@@ -1394,10 +1269,9 @@ static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long
             ipio_err("Failed to copy chip id to user space\n");
         break;
     case ILITEK_IOCTL_TP_MODE_CTRL:
-
-        if (copy_from_user(szBuf, (u8 *) arg, 4)) {
+        ret = copy_from_user(szBuf, (u8 *) arg, 4);
+        if (ret < 0) {
             ipio_err("Failed to copy data from user space\n");
-            ret = ENOMEM;
             break;
         }
         TPD_INFO("ioctl: switch fw mode = %d\n", szBuf[0]);
@@ -1414,9 +1288,9 @@ static long ilitek_node_ioctl(struct file *filp, unsigned int cmd, unsigned long
         break;
     /* It works for host downloado only */
     case ILITEK_IOCTL_ICE_MODE_SWITCH:
-        if (copy_from_user(szBuf, (u8 *) arg, 1)) {
+        ret = copy_from_user(szBuf, (u8 *) arg, 1);
+        if (ret < 0) {
             ipio_err("Failed to copy data from user space\n");
-            ret = ENOMEM;
             break;
         }
         TPD_INFO("ioctl: switch ice mode = %d", szBuf[0]);

@@ -9,6 +9,8 @@ menuconfig INPUT_TOUCHSCREEN
 
 	  If unsure, say Y.
 
+source "drivers/input/touchscreen/mediatek/Kconfig"
+
 if INPUT_TOUCHSCREEN
 
 config TOUCHSCREEN_PROPERTIES
@@ -1246,52 +1248,12 @@ config TOUCHSCREEN_ROHM_BU21023
 	  To compile this driver as a module, choose M here: the
 	  module will be called bu21023_ts.
 
-config TOUCHSCREEN_ST
-	bool "STMicroelectronics Touchscreen Driver"
-	depends on I2C
-	help
-	  Say Y here if you have a STMicroelectronics Touchscreen.
+config TOUCHSCREEN_MTK_TOUCH
+       string "Touch IC name for Mediatek package"
+       help
+         Set touch IC name if you have touch panel.
 
-	  If unsure, say N.
+         To compile this dirver for used touch IC.
 
-source "drivers/input/touchscreen/st/Kconfig"
-
-config TOUCHSCREEN_HIMAX_CHIPSET
-	bool "Himax touchpanel CHIPSET"
-	depends on I2C
-	help
-	  Say Y here if you have a Himax CHIPSET touchscreen.
-	  HIMAX controllers are multi touch controllers which can
-	  report 10 touches at a time.
-
-	  If unsure, say N.
-
-source "drivers/input/touchscreen/hxchipset/Kconfig"
-
-config TOUCHSCREEN_SYNAPTICS_DSX
-        bool "Synaptics DSX Touchscreen Driver"
-        depends on I2C
-        help
-          Say Y here if you have a Synaptics Touchscreen.
-
-          If unsure, say N.
-
-source "drivers/input/touchscreen/synaptics_dsx/Kconfig"
-
-config TOUCHSCREEN_SYNAPTICS_TCM
-	bool "Synaptics TCM Touchscreen Driver"
-	depends on I2C
-	help
-	  Say Y here if you have a Synaptics Touchscreen.
-
-	  If unsure, say N.
-
-source "drivers/input/touchscreen/synaptics_tcm/Kconfig"
-
-#ifdef ODM_WT_EDIT
-#Bo.Zhang@ODM_WT.BSP.Touchscreen,2020/03/21,Add Litchi TP for RM begain
-source "drivers/input/touchscreen/ili9881h/Kconfig"
-source "drivers/input/touchscreen/NT36525B/Kconfig"
-#Bo.Zhang@ODM_WT.BSP.Touchscreen,2020/03/21,Add Litchi TP for RM end
-#endif
+	source "drivers/input/touchscreen/oppo_touchscreen/Kconfig"
 endif

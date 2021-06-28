@@ -1367,10 +1367,10 @@ static void hid_output_field(const struct hid_device *hid,
  */
 static size_t hid_compute_report_size(struct hid_report *report)
 {
-       if (report->size)
-               return ((report->size - 1) >> 3) + 1;
+	if (report->size)
+		return ((report->size - 1) >> 3) + 1;
 
-       return 0;
+	return 0;
 }
 
 /*
@@ -2260,11 +2260,6 @@ static const struct hid_device_id hid_have_special_driver[] = {
 #endif
 #if IS_ENABLED(CONFIG_HID_PRODIKEYS)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_CREATIVELABS, USB_DEVICE_ID_PRODIKEYS_PCMIDI) },
-#endif
-#if IS_ENABLED(CONFIG_HID_QVR)
-	{ HID_USB_DEVICE(USB_VENDOR_ID_QVR5, USB_DEVICE_ID_QVR5) },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_QVR32A, USB_DEVICE_ID_QVR32A) },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_NREAL, USB_DEVICE_ID_NREAL) },
 #endif
 #if IS_ENABLED(CONFIG_HID_RETRODE)
 	{ HID_USB_DEVICE(USB_VENDOR_ID_FUTURE_TECHNOLOGY, USB_DEVICE_ID_RETRODE2) },

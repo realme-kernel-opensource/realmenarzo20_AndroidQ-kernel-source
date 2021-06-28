@@ -152,7 +152,7 @@ int mmc_send_app_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
 	cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R3 | MMC_CMD_BCR;
 
 #ifdef VENDOR_EDIT
-//Hexiaosen@PSW.BSP. 2019-11-11 Add for T card compatibility of reporting "busy state" at init stage.
+	//yh@Prd.BasicDrv, 2016-08-08 Add for T card compatbile which report "busy state" at init stage
 	for (i = 200; i; i--) {
 #else
 	for (i = 100; i; i--) {

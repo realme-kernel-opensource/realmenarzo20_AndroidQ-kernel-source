@@ -5,12 +5,12 @@
 ** Description: headerfile  for hardware infomation
 **
 ** Version: 1.0
-** Date : 2018/05/08
-** Author: Ming.He@BSP.Kernel.Boot
+** Date : 2018/08/11
+** Author: Jinfan.Hu@BSP.Kernel.Boot
 **
 ** ------------------------------- Revision History: -------------------------------
 **  	<author>		<data> 	   <version >	       <desc>
-**      Ming.He       2018/05/08     1.0               headerfile  for hardware infomation
+**      Jinfan.Hu       2018/08/11     1.0               headerfile  for hardware infomation
 **
 ****************************************************************/
 #ifndef __HARDWARE_H__
@@ -26,8 +26,11 @@ enum{
 	HARDWARE_FRONT_SUB_CAM,
 	HARDWARE_BACK_CAM,
 	HARDWARE_BACK_SUB_CAM,
-	HARDWARE_BACK_MACRO_CAM,
-	HARDWARE_BACK_WIDE_CAM,
+#ifdef ODM_WT_EDIT
+/*xiaojun.Pu@Camera.Driver, 2019/10/15, add for [add hardware_info for factory]*/
+	HARDWARE_WIDE_ANGLE_CAM,
+	HARDWARE_MONO_CAM,
+#endif /* ODM_WT_EDIT */
 	HARDWARE_BT,
 	HARDWARE_WIFI,
 	HARDWARE_ACCELEROMETER,
@@ -42,16 +45,24 @@ enum{
 	HARDWARE_FRONT_CAM_MOUDULE_ID,
 	HARDWARE_BACK_SUB_CAM_MOUDULE_ID,
 	HARDWARE_FRONT_SUB_CAM_MOUDULE_ID,
+#ifdef ODM_WT_EDIT
+/*xiaojun.Pu@Camera.Driver, 2019/10/15, add for [add hardware_info for factory]*/
+	HARDWARE_WIDE_ANGLE_CAM_MOUDULE_ID,
+	HARDWARE_MONO_CAM_MOUDULE_ID,
+#endif /* ODM_WT_EDIT */
 	HARDWARE_BACK_CAM_EFUSEID,
 	HARDWARE_BCAK_SUBCAM_EFUSEID,
 	HARDWARE_FRONT_CAME_EFUSEID,
 	HARDWARE_BACK_CAM_SENSORID,
 	HARDWARE_BACK_SUBCAM_SENSORID,
 	HARDWARE_FRONT_CAM_SENSORID,
+#ifdef ODM_WT_EDIT
+/*xiaojun.Pu@Camera.Driver, 2019/10/15, add for [add hardware_info for factory]*/
+	HARDWARE_MONO_CAM_SENSORID,
+	HARDWARE_WIDE_ANGLE_CAM_SENSORID,
+#endif /* ODM_WT_EDIT */
 	HARDWARE_BOARD_ID,
 	HARDWARE_HARDWARE_ID,
-	HARDWARE_CHARGER_IC,
-	HARDWARE_BMS_GAUGE,
 	HARDWARE_MAX_ITEM
 };
 
@@ -93,16 +104,20 @@ enum{
 #define HARDWARE_BACK_CAM_SENSORID_GET        		_IOWR(HARDWARE_ID, 0x29, char[HARDWARE_MAX_ITEM_LONGTH])        	//  back camera sensro_ID
 #define HARDWARE_BACK_SUBCAM_SENSORID_GET           _IOWR(HARDWARE_ID, 0x30, char[HARDWARE_MAX_ITEM_LONGTH])            //  back subcamera efuseId
 #define HARDWARE_FRONT_CAM_SENSORID_GET             _IOWR(HARDWARE_ID, 0x31, char[HARDWARE_MAX_ITEM_LONGTH])        	//  front camera efuseId
-
-#define HARDWARE_BACK_MACROCAM_GET                  _IOWR(HARDWARE_ID, 0x32, char[HARDWARE_MAX_ITEM_LONGTH])            //  multi back camera，back macro
-#define HARDWARE_BACK_WIDECAM_GET                   _IOWR(HARDWARE_ID, 0x33, char[HARDWARE_MAX_ITEM_LONGTH])            //  multi back camera，back macro
-
-#define HARDWARE_BMS_GAUGE_GET		                _IOWR(HARDWARE_ID, 0x41, char[HARDWARE_MAX_ITEM_LONGTH])
+#ifdef ODM_WT_EDIT
+/*xiaojun.Pu@Camera.Driver, 2019/10/15, add for [add hardware_info for factory]*/
+#define HARDWARE_WIDE_ANGLE_CAM_GET                 _IOWR(HARDWARE_ID, 0x34, char[HARDWARE_MAX_ITEM_LONGTH])            //  wide_angle
+#define HARDWARE_WIDE_ANGLE_CAM_MOUDULE_ID_GET      _IOWR(HARDWARE_ID, 0x35, char[HARDWARE_MAX_ITEM_LONGTH])            //  wide_angle module
+#define HARDWARE_WIDE_ANGLE_CAM_SENSORID_GET        _IOWR(HARDWARE_ID, 0x37, char[HARDWARE_MAX_ITEM_LONGTH])            //  wide_angle sensorId
+#define HARDWARE_MONO_CAM_GET                       _IOWR(HARDWARE_ID, 0x3C, char[HARDWARE_MAX_ITEM_LONGTH])            //  mono CAM
+#define HARDWARE_MONO_CAM_MOUDULE_ID_GET            _IOWR(HARDWARE_ID, 0x3D, char[HARDWARE_MAX_ITEM_LONGTH])            //  mono cam module
+#define HARDWARE_MONO_CAM_SENSORID_GET              _IOWR(HARDWARE_ID, 0x3F, char[HARDWARE_MAX_ITEM_LONGTH])            //  mono cam sensor
+#endif /* ODM_WT_EDIT */
 #define HARDWARE_BACK_CAM_MOUDULE_ID_SET            _IOWR(HARDWARE_ID, 0x81, char[HARDWARE_MAX_ITEM_LONGTH])
 #define HARDWARE_FRONT_CAM_MODULE_ID_SET            _IOWR(HARDWARE_ID, 0x82, char[HARDWARE_MAX_ITEM_LONGTH])
 #define HARDWARE_BACK_SUBCAM_MODULE_ID_SET          _IOWR(HARDWARE_ID, 0x83, char[HARDWARE_MAX_ITEM_LONGTH])
 
-#define HARDWARE_CHARGER_IC_INFO_GET                _IOWR(HARDWARE_ID, 0x86, char[HARDWARE_MAX_ITEM_LONGTH])
+
 
 int hardwareinfo_set_prop(int cmd, const char *name);
 void hardwareinfo_tp_register(void (*fn)(void *), void *driver_data);
